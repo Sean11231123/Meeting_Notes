@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'main.dart';
 import 'api_key_page.dart';
 import 'transitions.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class OnboardingPage extends StatefulWidget {
   const OnboardingPage({super.key});
@@ -28,6 +28,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
       description:
           '用瀏覽器前往：\n\naistudio.google.com\n\n用你的 Google 帳號登入。\n（建議使用 Gmail 帳號）',
       highlightText: 'aistudio.google.com',
+      highlightUrl: 'https://aistudio.google.com',
     ),
     OnboardingStep(
       emoji: '🔑',
@@ -137,23 +138,49 @@ class _OnboardingPageState extends State<OnboardingPage> {
                       ),
                       if (step.highlightText != null) ...[
                         const SizedBox(height: 16),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 10,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.indigo.shade50,
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: Colors.indigo.shade200),
-                          ),
-                          child: Text(
-                            step.highlightText!,
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.indigo,
-                              fontFamily: 'monospace',
+                        GestureDetector(
+                          onTap: step.highlightUrl != null
+                              ? () async {
+                                  final uri = Uri.parse(step.highlightUrl!);
+                                  if (await canLaunchUrl(uri)) {
+                                    await launchUrl(
+                                      uri,
+                                      mode: LaunchMode.externalApplication,
+                                    );
+                                  }
+                                }
+                              : null,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 10,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.indigo.shade50,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Colors.indigo.shade200),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  step.highlightText!,
+                                  style: const TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.indigo,
+                                    fontFamily: 'monospace',
+                                  ),
+                                ),
+                                if (step.highlightUrl != null) ...[
+                                  const SizedBox(width: 8),
+                                  const Icon(
+                                    Icons.open_in_new,
+                                    size: 16,
+                                    color: Colors.indigo,
+                                  ),
+                                ],
+                              ],
                             ),
                           ),
                         ),
@@ -261,11 +288,13 @@ class OnboardingStep {
   final String title;
   final String description;
   final String? highlightText;
+  final String? highlightUrl;
 
   const OnboardingStep({
     required this.emoji,
     required this.title,
     required this.description,
     this.highlightText,
+    this.highlightUrl,
   });
 }
