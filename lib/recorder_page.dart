@@ -5,7 +5,6 @@ import 'package:flutter/services.dart';
 import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:google_generative_ai/google_generative_ai.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:share_plus/share_plus.dart';
@@ -213,14 +212,26 @@ class _RecorderPageState extends State<RecorderPage> {
       String? fileUri;
 
       if (kIsWeb) {
-        // 網頁版：直接用記憶體中的 bytes
-        audioBytes = _webAudioBytes;
-        if (audioBytes == null) {
+        if (_webAudioBytes == null) {
           setState(() {
             _isAnalyzing = false;
             _statusText = '找不到錄音資料，請重新錄音';
           });
           return;
+        }
+        final fileSizeMB = _webAudioBytes!.length / (1024 * 1024);
+        if (fileSizeMB <= 20) {
+          // 小檔案直接送
+          audioBytes = _webAudioBytes;
+        } else {
+          // 大檔案用 File API 上傳
+          final fileService = GeminiFileService(apiKey);
+          setState(
+            () => _statusText = '上傳音訊中（${fileSizeMB.toStringAsFixed(0)}MB）...',
+          );
+          fileUri = await fileService.uploadAudioBytes(_webAudioBytes!);
+          setState(() => _statusText = '等待 Google 處理音訊...');
+          await fileService.waitUntilActive(fileUri);
         }
       } else {
         final audioFile = File(_lastFilePath!);
@@ -279,13 +290,11 @@ ${template.prompt}
             enhancedPrompt,
             modelName,
           );
-          results.add('# ${template.icon} ${template.name}\n\n$result');
+          results.add(result);
           continue;
         }
 
-        results.add(
-          '# ${template.icon} ${template.name}\n\n${response.text ?? '無法取得分析結果'}',
-        );
+        results.add(response.text ?? '無法取得分析結果');
       }
 
       // 合併所有模板結果

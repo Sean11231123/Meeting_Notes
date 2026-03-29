@@ -48,6 +48,18 @@ class _OnboardingPageState extends State<OnboardingPage> {
           'Gemini API 對個人開發者提供免費額度：\n\n• 每天最多 1,500 次請求\n• 完全免費，不需要綁定信用卡\n\n一般學生日常使用完全足夠！',
     ),
     OnboardingStep(
+      emoji: '📱',
+      title: '加到主畫面（iOS）',
+      description:
+          '如果你是 iPhone 用戶：\n\n1. 用 Safari 開啟本 App 的網址\n2. 點底部的「分享」按鈕 □↑\n3. 向下滑找到「加入主畫面」\n4. 點「新增」\n\n之後就可以像一般 App 一樣從主畫面開啟！',
+    ),
+    OnboardingStep(
+      emoji: '🤖',
+      title: '加到主畫面（Android）',
+      description:
+          '如果你是 Android 用戶：\n\n方法一（建議）：\n直接安裝 APK 檔案\n\n方法二（網頁版）：\n1. 用 Chrome 開啟本 App 網址\n2. 點右上角選單「⋮」\n3. 選「新增至主畫面」\n4. 點「新增」',
+    ),
+    OnboardingStep(
       emoji: '✅',
       title: '準備完成！',
       description:
@@ -179,33 +191,61 @@ class _OnboardingPageState extends State<OnboardingPage> {
                 ),
                 const SizedBox(height: 32),
 
-                // 下一步 / 完成按鈕
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: () {
-                      if (_currentPage < _steps.length - 1) {
-                        _controller.nextPage(
-                          duration: const Duration(milliseconds: 300),
-                          curve: Curves.easeInOut,
-                        );
-                      } else {
-                        _skipOrFinish();
-                      }
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.indigo,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
+                Row(
+                  children: [
+                    // 上一頁按鈕（第一頁時隱藏）
+                    if (_currentPage > 0)
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () {
+                            _controller.previousPage(
+                              duration: const Duration(milliseconds: 300),
+                              curve: Curves.easeInOut,
+                            );
+                          },
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          child: const Text(
+                            '上一頁',
+                            style: TextStyle(fontSize: 16),
+                          ),
+                        ),
+                      ),
+
+                    if (_currentPage > 0) const SizedBox(width: 12),
+
+                    // 下一步 / 完成按鈕
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: () {
+                          if (_currentPage < _steps.length - 1) {
+                            _controller.nextPage(
+                              duration: const Duration(milliseconds: 300),
+                              curve: Curves.easeInOut,
+                            );
+                          } else {
+                            _skipOrFinish();
+                          }
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.indigo,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        child: Text(
+                          _currentPage < _steps.length - 1 ? '下一步' : '開始使用',
+                          style: const TextStyle(fontSize: 16),
+                        ),
                       ),
                     ),
-                    child: Text(
-                      _currentPage < _steps.length - 1 ? '下一步' : '開始使用',
-                      style: const TextStyle(fontSize: 16),
-                    ),
-                  ),
+                  ],
                 ),
               ],
             ),

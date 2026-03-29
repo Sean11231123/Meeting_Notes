@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'theme_provider.dart';
 import 'api_key_page.dart';
 import 'transitions.dart';
+import 'feedback_page.dart';
 
 class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key});
@@ -10,7 +11,6 @@ class SettingsPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final themeProvider = context.watch<ThemeProvider>();
-    final scheme = Theme.of(context).colorScheme;
 
     return Scaffold(
       appBar: AppBar(title: const Text('設定')),
@@ -36,6 +36,19 @@ class SettingsPage extends StatelessWidget {
           _SectionHeader(title: '外觀'),
           const SizedBox(height: 12),
           _ThemeSelector(themeProvider: themeProvider),
+
+          const SizedBox(height: 32),
+
+          // 意見反饋區塊
+          _SectionHeader(title: '意見反饋'),
+          const SizedBox(height: 12),
+          _SettingsTile(
+            icon: Icons.feedback_outlined,
+            title: '提供意見 / 回報問題',
+            subtitle: '告訴我們你的想法或遇到的問題',
+            onTap: () =>
+                Navigator.push(context, SlideRoute(page: const FeedbackPage())),
+          ),
         ],
       ),
     );
