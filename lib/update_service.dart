@@ -7,27 +7,35 @@ import 'package:url_launcher/url_launcher.dart';
 
 class UpdateService {
   static const _versionUrl =
-      'https://raw.githubusercontent.com/Sean11231123/Meeting_Notes/main/version.json';
+      'https://raw.githubusercontent.com/Sean11231123/Meeting_Notes/refs/heads/main/version.json';
 
   static Future<void> checkForUpdate(BuildContext context) async {
-    // 網頁版不檢查更新
     if (kIsWeb) return;
 
     try {
-      // 讀取目前 App 版本號
       final packageInfo = await PackageInfo.fromPlatform();
-      final currentVersion = packageInfo.version;
+      final currentVersion = packageInfo.version.split('+').first;
+
+      debugPrint('目前版本：$currentVersion');
 
       final response = await http
           .get(Uri.parse(_versionUrl))
           .timeout(const Duration(seconds: 5));
 
+      debugPrint('HTTP 狀態碼：${response.statusCode}');
+      debugPrint('回應內容：${response.body}');
+
       if (response.statusCode != 200) return;
 
       final json = jsonDecode(response.body);
       final latestVersion = json['version'] as String?;
+
+      debugPrint('最新版本：$latestVersion');
+      debugPrint('是否需要更新：${_isNewer(latestVersion ?? '', currentVersion)}');
+
       final message = json['message'] as String? ?? '有新版本可用';
-      final url = json['url'] as String? ??
+      final url =
+          json['url'] as String? ??
           'https://github.com/Sean11231123/Meeting_Notes';
 
       if (latestVersion == null) return;
@@ -36,8 +44,8 @@ class UpdateService {
       if (context.mounted) {
         _showUpdateDialog(context, latestVersion, message, url);
       }
-    } catch (_) {
-      // 靜默失敗
+    } catch (e) {
+      debugPrint('更新檢查失敗：$e');
     }
   }
 
