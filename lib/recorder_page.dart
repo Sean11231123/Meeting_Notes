@@ -20,6 +20,7 @@ import 'package:flutter/foundation.dart';
 import 'web_recorder.dart' if (dart.library.io) 'web_recorder_stub.dart';
 import 'key_storage.dart';
 import 'update_service.dart';
+import 'package:file_picker/file_picker.dart';
 
 class RecorderPage extends StatefulWidget {
   const RecorderPage({super.key});
@@ -33,11 +34,12 @@ class _RecorderPageState extends State<RecorderPage> {
   final WebRecorder _webRecorder = WebRecorder();
   Uint8List? _webAudioBytes;
   Timer? _timer;
+  String? _uploadedFileName;
   int _recordSeconds = 0;
   static const _serviceChannel = MethodChannel(
     'com.example.meeting_notes/recording_service',
   );
-  
+
   @override
   void initState() {
     super.initState();
@@ -45,7 +47,7 @@ class _RecorderPageState extends State<RecorderPage> {
       if (mounted) UpdateService.checkForUpdate(context);
     });
   }
-  
+
   bool _isRecording = false;
   bool _isAnalyzing = false;
   String _statusText = '按下按鈕開始錄音';
@@ -194,10 +196,59 @@ class _RecorderPageState extends State<RecorderPage> {
     }
   }
 
+  Future<void> _pickAudioFile() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.audio,
+      allowMultiple: false,
+      withData: kIsWeb,
+    );
+
+    if (result == null || result.files.isEmpty) return;
+
+    final file = result.files.first;
+
+    setState(() {
+      _uploadedFileName = file.name;
+      _analysisResult = null;
+
+      if (kIsWeb) {
+        _webAudioBytes = file.bytes;
+        _lastFilePath = 'web_upload';
+      } else {
+        _lastFilePath = file.path;
+        _webAudioBytes = null;
+      }
+
+      _statusText = '已選取：${file.name}\n按下 AI 分析開始整理。';
+    });
+  }
+
   Future<void> _analyzeWithTemplates(
     List<MeetingTemplate> templates,
     String noteName,
   ) async {
+    String _getMimeType(String fileName) {
+      final ext = fileName.split('.').last.toLowerCase();
+      switch (ext) {
+        case 'mp3':
+          return 'audio/mpeg';
+        case 'm4a':
+          return 'audio/mp4';
+        case 'wav':
+          return 'audio/wav';
+        case 'webm':
+          return 'audio/webm';
+        case 'ogg':
+          return 'audio/ogg';
+        case 'aac':
+          return 'audio/aac';
+        case 'flac':
+          return 'audio/flac';
+        default:
+          return 'audio/mpeg';
+      }
+    }
+
     if (_lastFilePath == null) return;
 
     setState(() {
@@ -238,7 +289,13 @@ class _RecorderPageState extends State<RecorderPage> {
           setState(
             () => _statusText = '上傳音訊中（${fileSizeMB.toStringAsFixed(0)}MB）...',
           );
-          fileUri = await fileService.uploadAudioBytes(_webAudioBytes!);
+          fileUri = await fileService.uploadAudioBytes(
+            _webAudioBytes!,
+            mimeType: _uploadedFileName != null
+                ? _getMimeType(_uploadedFileName!)
+                : 'audio/webm',
+            fileName: _uploadedFileName ?? 'recording.webm',
+          );
           setState(() => _statusText = '等待 Google 處理音訊...');
           await fileService.waitUntilActive(fileUri);
         }
@@ -288,7 +345,12 @@ ${template.prompt}
         if (audioBytes != null) {
           response = await model.generateContent([
             Content.multi([
-              DataPart(kIsWeb ? 'audio/webm' : 'audio/wav', audioBytes),
+              DataPart(
+                _uploadedFileName != null
+                    ? _getMimeType(_uploadedFileName!)
+                    : (kIsWeb ? 'audio/webm' : 'audio/wav'),
+                audioBytes,
+              ),
               TextPart(enhancedPrompt),
             ]),
           ]);
@@ -595,27 +657,58 @@ ${_selectedTemplate.prompt}
             const SizedBox(height: 32),
 
             // 錄音按鈕
-            AnimatedButton(
-              onPressed: _isAnalyzing ? null : _toggleRecording,
-              scaleFactor: 0.97,
-              child: SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  onPressed: _isAnalyzing ? null : _toggleRecording,
-                  icon: Icon(
-                    _isRecording ? Icons.stop : Icons.fiber_manual_record,
-                  ),
-                  label: Text(_isRecording ? '停止錄音' : '開始錄音'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _isRecording
-                        ? Colors.red
-                        : Theme.of(context).colorScheme.primary,
-                    foregroundColor: Theme.of(context).colorScheme.onPrimary,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    textStyle: const TextStyle(fontSize: 18),
+            Row(
+              children: [
+                // 錄音按鈕
+                Expanded(
+                  child: AnimatedButton(
+                    onPressed: _isAnalyzing ? null : _toggleRecording,
+                    scaleFactor: 0.97,
+                    child: ElevatedButton.icon(
+                      onPressed: _isAnalyzing ? null : _toggleRecording,
+                      icon: Icon(
+                        _isRecording ? Icons.stop : Icons.fiber_manual_record,
+                      ),
+                      label: Text(_isRecording ? '停止' : '錄音'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _isRecording
+                            ? Colors.red
+                            : Theme.of(context).colorScheme.primary,
+                        foregroundColor: Theme.of(
+                          context,
+                        ).colorScheme.onPrimary,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        textStyle: const TextStyle(fontSize: 16),
+                      ),
+                    ),
                   ),
                 ),
-              ),
+                const SizedBox(width: 12),
+                // 上傳音檔按鈕
+                Expanded(
+                  child: AnimatedButton(
+                    onPressed: _isAnalyzing || _isRecording
+                        ? null
+                        : _pickAudioFile,
+                    scaleFactor: 0.97,
+                    child: ElevatedButton.icon(
+                      onPressed: _isAnalyzing || _isRecording
+                          ? null
+                          : _pickAudioFile,
+                      icon: const Icon(Icons.upload_file),
+                      label: const Text('上傳音檔'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Theme.of(context).colorScheme.primary,
+                        foregroundColor: Theme.of(
+                          context,
+                        ).colorScheme.onPrimary,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        textStyle: const TextStyle(fontSize: 16),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
 
             // AI 分析按鈕（停止後才出現）

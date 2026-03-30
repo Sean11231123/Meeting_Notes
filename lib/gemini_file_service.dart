@@ -13,13 +13,13 @@ class GeminiFileService {
     return _uploadBytes(bytes, 'audio/wav', audioFile.path.split('/').last);
   }
 
-  // 網頁版：從 Uint8List 上傳
-  Future<String> uploadAudioBytes(Uint8List bytes) async {
-    return _uploadBytes(
-      bytes,
-      'audio/webm',
-      'recording_${DateTime.now().millisecondsSinceEpoch}.webm',
-    );
+  // 網頁版/上傳檔案：從 Uint8List 上傳
+  Future<String> uploadAudioBytes(
+    Uint8List bytes, {
+    String mimeType = 'audio/webm',
+    String fileName = 'recording.webm',
+  }) async {
+    return _uploadBytes(bytes, mimeType, fileName);
   }
 
   // 共用上傳邏輯
@@ -107,7 +107,8 @@ class GeminiFileService {
       if (response.statusCode != 200) continue;
 
       final json = jsonDecode(response.body);
-      final state = json['file']['state'] as String?;
+      final fileData = json['file'] ?? json;
+      final state = fileData['state'] as String?;
 
       if (state == 'ACTIVE') return;
       if (state == 'FAILED') throw Exception('檔案處理失敗');
