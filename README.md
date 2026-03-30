@@ -8,4 +8,3 @@
 *   📦 [下載 Android APK (最新版本)](https://github.com/Sean11231123/Meeting_Notes/releases/latest)
 =======
 *   📦 [下載 Android APK (最新版本)](https://github.com/Sean11231123/Meeting_Notes/releases/latest)
->>>>>>> cb2fb44224a4654b3f98902ce4bcb906713a5001
