@@ -1,5 +1,5 @@
 {
-    "version": "1.2.11",
+    "version": "1.2.5",
     "message": "修正更新訊息自動觸發與APP端更新按鈕問題",
     "url": "https://github.com/Sean11231123/Meeting_Notes/releases/latest"
 }
