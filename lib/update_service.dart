@@ -1,15 +1,23 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class UpdateService {
   static const _versionUrl =
       'https://raw.githubusercontent.com/Sean11231123/Meeting_Notes/main/version.json';
-  static const _currentVersion = '1.0.0';
 
   static Future<void> checkForUpdate(BuildContext context) async {
+    // 網頁版不檢查更新
+    if (kIsWeb) return;
+
     try {
+      // 讀取目前 App 版本號
+      final packageInfo = await PackageInfo.fromPlatform();
+      final currentVersion = packageInfo.version;
+
       final response = await http
           .get(Uri.parse(_versionUrl))
           .timeout(const Duration(seconds: 5));
@@ -19,32 +27,35 @@ class UpdateService {
       final json = jsonDecode(response.body);
       final latestVersion = json['version'] as String?;
       final message = json['message'] as String? ?? '有新版本可用';
-      final url =
-          json['url'] as String? ??
+      final url = json['url'] as String? ??
           'https://github.com/Sean11231123/Meeting_Notes';
 
       if (latestVersion == null) return;
-      if (!_isNewer(latestVersion, _currentVersion)) return;
+      if (!_isNewer(latestVersion, currentVersion)) return;
 
       if (context.mounted) {
         _showUpdateDialog(context, latestVersion, message, url);
       }
     } catch (_) {
-      // 靜默失敗，不影響正常使用
+      // 靜默失敗
     }
   }
 
   static bool _isNewer(String latest, String current) {
-    final l = latest.split('.').map(int.parse).toList();
-    final c = current.split('.').map(int.parse).toList();
+    try {
+      final l = latest.split('.').map(int.parse).toList();
+      final c = current.split('.').map(int.parse).toList();
 
-    for (int i = 0; i < 3; i++) {
-      final lv = i < l.length ? l[i] : 0;
-      final cv = i < c.length ? c[i] : 0;
-      if (lv > cv) return true;
-      if (lv < cv) return false;
+      for (int i = 0; i < 3; i++) {
+        final lv = i < l.length ? l[i] : 0;
+        final cv = i < c.length ? c[i] : 0;
+        if (lv > cv) return true;
+        if (lv < cv) return false;
+      }
+      return false;
+    } catch (_) {
+      return false;
     }
-    return false;
   }
 
   static void _showUpdateDialog(
