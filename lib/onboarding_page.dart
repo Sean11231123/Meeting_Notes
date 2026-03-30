@@ -75,7 +75,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
     _controller = PageController(initialPage: widget.startPage);
     _currentPage = widget.startPage;
   }
-
+ 
   void _skipOrFinish() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('onboarding_done', true);

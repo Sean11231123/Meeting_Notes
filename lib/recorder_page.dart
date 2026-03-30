@@ -19,6 +19,7 @@ import 'recording_visualizer.dart';
 import 'package:flutter/foundation.dart';
 import 'web_recorder.dart' if (dart.library.io) 'web_recorder_stub.dart';
 import 'key_storage.dart';
+import 'update_service.dart';
 
 class RecorderPage extends StatefulWidget {
   const RecorderPage({super.key});
@@ -36,7 +37,15 @@ class _RecorderPageState extends State<RecorderPage> {
   static const _serviceChannel = MethodChannel(
     'com.example.meeting_notes/recording_service',
   );
-
+  
+  @override
+  void initState() {
+    super.initState();
+    Future.delayed(const Duration(seconds: 2), () {
+      if (mounted) UpdateService.checkForUpdate(context);
+    });
+  }
+  
   bool _isRecording = false;
   bool _isAnalyzing = false;
   String _statusText = '按下按鈕開始錄音';

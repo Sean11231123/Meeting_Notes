@@ -322,3 +322,4 @@ class _HistoryDetailPageState extends State<HistoryDetailPage> {
     );
   }
 }
+

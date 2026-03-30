@@ -1,5 +1,5 @@
 {
     "version": "1.2.3",
-    "message": "🚀 重大更新：支援 90 分鐘錄音、新增 Onboarding 教學與 UI 優化！",
+    "message": "修復歷史紀錄 Markdown 顯示、API Key 更新跳頁問題，新增教學連結、GitHub 連結與自動更新提示。",
     "url": "https://github.com/Sean11231123/Meeting_Notes/releases/latest"
 }
