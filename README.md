@@ -1,17 +1,7 @@
-# meeting_notes
+# Meeting_Notes 📝
 
-A new Flutter project.
+一款支援長時錄音、自動摘要與 AI 分析的會議筆記工具。
 
-## Getting Started
-
-This project is a starting point for a Flutter application.
-
-A few resources to get you started if this is your first Flutter project:
-
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+🔗 **快速連結**：
+*   🌐 [直接使用 Web 版 (GitHub Pages)](https://sean11231123.github.io/Meeting_Notes/)(無法在背景執行)
+*   📦 [下載 Android APK (最新版本)](https://github.com/Sean11231123/Meeting_Notes/releases/latest)
