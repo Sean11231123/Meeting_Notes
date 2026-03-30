@@ -5,14 +5,15 @@ import 'transitions.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class OnboardingPage extends StatefulWidget {
-  const OnboardingPage({super.key});
+  final int startPage;
+  const OnboardingPage({super.key, this.startPage = 0});
 
   @override
   State<OnboardingPage> createState() => _OnboardingPageState();
 }
 
 class _OnboardingPageState extends State<OnboardingPage> {
-  final PageController _controller = PageController();
+  late final PageController _controller;
   int _currentPage = 0;
 
   final List<OnboardingStep> _steps = [
@@ -67,6 +68,13 @@ class _OnboardingPageState extends State<OnboardingPage> {
           '把剛才複製的 API Key 貼進下一個畫面的輸入框，就可以開始使用了。\n\n日後可以在主畫面右上角的設定圖示重新更換 Key。',
     ),
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = PageController(initialPage: widget.startPage);
+    _currentPage = widget.startPage;
+  }
 
   void _skipOrFinish() async {
     final prefs = await SharedPreferences.getInstance();

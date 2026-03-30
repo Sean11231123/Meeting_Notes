@@ -4,6 +4,7 @@ import 'history_service.dart';
 import 'download_service.dart';
 import 'calendar_page.dart';
 import 'transitions.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 
 class HistoryPage extends StatefulWidget {
   const HistoryPage({super.key});
@@ -288,12 +289,30 @@ class _HistoryDetailPageState extends State<HistoryDetailPage> {
                   color: Theme.of(context).colorScheme.outline.withOpacity(0.3),
                 ),
               ),
-              child: SelectableText(
-                widget.record.result,
-                style: TextStyle(
-                  fontSize: 14,
-                  height: 1.6,
-                  color: Theme.of(context).colorScheme.onSurface,
+              child: MarkdownBody(
+                data: widget.record.result,
+                selectable: true,
+                styleSheet: MarkdownStyleSheet(
+                  h1: TextStyle(
+                    color: Theme.of(context).colorScheme.primary,
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                  ),
+                  h2: TextStyle(
+                    color: Theme.of(context).colorScheme.primary,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    height: 2.0,
+                  ),
+                  p: TextStyle(
+                    fontSize: 14,
+                    height: 1.6,
+                    color: Theme.of(context).colorScheme.onSurface,
+                  ),
+                  listBullet: TextStyle(
+                    color: Theme.of(context).colorScheme.primary,
+                    fontSize: 14,
+                  ),
                 ),
               ),
             ),

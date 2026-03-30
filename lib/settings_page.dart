@@ -4,6 +4,7 @@ import 'theme_provider.dart';
 import 'api_key_page.dart';
 import 'transitions.dart';
 import 'feedback_page.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key});
@@ -40,14 +41,31 @@ class SettingsPage extends StatelessWidget {
           const SizedBox(height: 32),
 
           // 意見反饋區塊
-          _SectionHeader(title: '意見反饋'),
-          const SizedBox(height: 12),
           _SettingsTile(
             icon: Icons.feedback_outlined,
             title: '提供意見 / 回報問題',
             subtitle: '告訴我們你的想法或遇到的問題',
             onTap: () =>
                 Navigator.push(context, SlideRoute(page: const FeedbackPage())),
+          ),
+
+          const SizedBox(height: 32),
+
+          // 關於區塊（新增）
+          _SectionHeader(title: '關於'),
+          const SizedBox(height: 12),
+          _SettingsTile(
+            icon: Icons.code,
+            title: '開源專案',
+            subtitle: '在 GitHub 上查看原始碼',
+            onTap: () async {
+              final uri = Uri.parse(
+                'https://github.com/Sean11231123/Meeting_Notes',
+              );
+              if (await canLaunchUrl(uri)) {
+                await launchUrl(uri, mode: LaunchMode.externalApplication);
+              }
+            },
           ),
         ],
       ),

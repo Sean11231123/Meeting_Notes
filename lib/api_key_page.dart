@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'recorder_page.dart'; // 確保能跳轉到錄音頁
 import 'transitions.dart';
 import 'key_storage.dart';
+import 'onboarding_page.dart';
 
 class ApiKeyPage extends StatefulWidget {
   final bool isUpdate;
@@ -24,10 +24,21 @@ class _ApiKeyPageState extends State<ApiKeyPage> {
   }
 
   Future<void> _loadExistingKey() async {
+    if (widget.isUpdate) {
+      // 更新模式：直接顯示頁面，不自動跳轉
+      final key = await KeyStorage.read();
+      _controller.text = ''; // 清空讓用戶重新輸入
+      setState(() => _isLoading = false);
+      return;
+    }
+
     final key = await KeyStorage.read();
     if (key != null && key.isNotEmpty) {
       if (mounted) {
-        Navigator.pushReplacement(context, FadeRoute(page: RecorderPage()));
+        Navigator.pushReplacement(
+          context,
+          FadeRoute(page: const RecorderPage()),
+        );
       }
     } else {
       setState(() => _isLoading = false);
@@ -72,7 +83,7 @@ class _ApiKeyPageState extends State<ApiKeyPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('設定 API Key'),
+        title: Text(widget.isUpdate ? '更改 API Key' : '設定 API Key'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
       ),
       body: Padding(
@@ -90,6 +101,21 @@ class _ApiKeyPageState extends State<ApiKeyPage> {
             const Text(
               '前往 aistudio.google.com 免費申請',
               style: TextStyle(color: Colors.grey),
+            ),
+            const SizedBox(height: 8),
+            GestureDetector(
+              onTap: () => Navigator.push(
+                context,
+                SlideRoute(page: const OnboardingPage(startPage: 1)),
+              ),
+              child: const Text(
+                'How to create your API Key?',
+                style: TextStyle(
+                  color: Colors.indigo,
+                  fontSize: 13,
+                  decoration: TextDecoration.underline,
+                ),
+              ),
             ),
             const SizedBox(height: 32),
             TextField(
