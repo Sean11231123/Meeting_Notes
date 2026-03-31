@@ -23,26 +23,50 @@ class _OnboardingPageState extends State<OnboardingPage> {
       description:
           '這個 App 可以幫你錄音，並用 AI 自動整理成結構化的筆記。\n\n在開始之前，你需要申請一個免費的 Gemini API Key。',
     ),
+    // --- 8 頁圖片教學 ---
     OnboardingStep(
-      emoji: '🌐',
-      title: '第一步：開啟 Google AI Studio',
-      description:
-          '用瀏覽器前往：\n\naistudio.google.com\n\n用你的 Google 帳號登入。\n（建議使用 Gmail 帳號）',
+      title: '第一步',
+      description: '進到 aistudio.google.com，點擊左上角的選單',
+      imageAsset: 'assets/images/step1.png',
       highlightText: 'aistudio.google.com',
       highlightUrl: 'https://aistudio.google.com',
     ),
     OnboardingStep(
-      emoji: '🔑',
-      title: '第二步：建立 API Key',
-      description:
-          '登入後，點擊左側選單的\n「Get API key」\n\n然後點擊「Create API key」\n\n選擇「Create API key in new project」',
+      title: '第二步',
+      description: '點擊左下角的 "Get API key"',
+      imageAsset: 'assets/images/step2.png',
     ),
     OnboardingStep(
-      emoji: '📋',
-      title: '第三步：複製 API Key',
-      description:
-          '系統會產生一串以「AIza」開頭的金鑰。\n\n點擊旁邊的複製按鈕，把這串金鑰複製起來。\n\n⚠️ 請勿將 API Key 分享給他人',
+      title: '第三步',
+      description: '點擊右上角的 "Create API key"',
+      imageAsset: 'assets/images/step3.png',
     ),
+    OnboardingStep(
+      title: '第四步',
+      description: '創建一個 project',
+      imageAsset: 'assets/images/step4.png',
+    ),
+    OnboardingStep(
+      title: '第五步',
+      description: '點擊 "Create project"',
+      imageAsset: 'assets/images/step5.png',
+    ),
+    OnboardingStep(
+      title: '第六步',
+      description: '點擊 "Create key"',
+      imageAsset: 'assets/images/step6.png',
+    ),
+    OnboardingStep(
+      title: '第七步',
+      description: '點擊剛剛創建好的 key',
+      imageAsset: 'assets/images/step7.png',
+    ),
+    OnboardingStep(
+      title: '第八步',
+      description: '點擊 "Copy key" 就完成了！',
+      imageAsset: 'assets/images/step8.png',
+    ),
+    // --- 圖片教學結束 ---
     OnboardingStep(
       emoji: '💰',
       title: '費用說明',
@@ -53,13 +77,13 @@ class _OnboardingPageState extends State<OnboardingPage> {
       emoji: '📱',
       title: '加到主畫面（iOS）',
       description:
-          '如果你是 iPhone 用戶：\n\n1. 用 Safari 開啟本 App 的網址\n2. 點底部的「分享」按鈕 □↑\n3. 向下滑找到「加入主畫面」\n4. 點「新增」\n\n之後就可以像一般 App 一樣從主畫面開啟！',
+          '如果你是 iPhone 用戶：\n1. 用 Safari 開啟本 App 的網址\n2. 點底部的「分享」按鈕 □↑\n3. 向下滑找到「加入主畫面」\n4. 點「新增」\n之後就可以像一般 App 一樣從主畫面開啟！\n\n注意：ios用戶無法在背景執行本服務，可以選擇上傳音檔來獲得較好的體驗',
     ),
     OnboardingStep(
       emoji: '🤖',
       title: '加到主畫面（Android）',
       description:
-          '如果你是 Android 用戶：\n\n方法一（建議）：\n直接安裝 APK 檔案\n\n方法二（網頁版）：\n1. 用 Chrome 開啟本 App 網址\n2. 點右上角選單「⋮」\n3. 選「新增至主畫面」\n4. 點「新增」',
+          '如果你是 Android 用戶：\n方法一（建議）：\n直接安裝 APK 檔案\n\n方法二（網頁版）：\n1. 用 Chrome 開啟本 App 網址\n2. 點右上角選單「⋮」\n3. 選「新增至主畫面」\n4. 點「新增」',
     ),
     OnboardingStep(
       emoji: '✅',
@@ -75,7 +99,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
     _controller = PageController(initialPage: widget.startPage);
     _currentPage = widget.startPage;
   }
- 
+
   void _skipOrFinish() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('onboarding_done', true);
@@ -110,7 +134,6 @@ class _OnboardingPageState extends State<OnboardingPage> {
       ),
       body: Column(
         children: [
-          // 頁面內容
           Expanded(
             child: PageView.builder(
               controller: _controller,
@@ -123,8 +146,27 @@ class _OnboardingPageState extends State<OnboardingPage> {
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Text(step.emoji, style: const TextStyle(fontSize: 80)),
-                      const SizedBox(height: 32),
+                      // 有圖片時顯示圖片，否則顯示 emoji
+                      if (step.imageAsset != null) ...[
+                        ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxHeight:
+                                MediaQuery.of(context).size.height *
+                                0.55, // 限制圖片最多佔螢幕高度的 40%
+                          ),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(12),
+                            child: Image.asset(
+                              step.imageAsset!,
+                              fit: BoxFit.contain,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                      ] else if (step.emoji != null) ...[
+                        Text(step.emoji!, style: const TextStyle(fontSize: 80)),
+                        const SizedBox(height: 32),
+                      ],
                       Text(
                         step.title,
                         textAlign: TextAlign.center,
@@ -134,7 +176,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
                           color: Colors.indigo,
                         ),
                       ),
-                      const SizedBox(height: 24),
+                      const SizedBox(height: 10),
                       Text(
                         step.description,
                         textAlign: TextAlign.center,
@@ -200,12 +242,10 @@ class _OnboardingPageState extends State<OnboardingPage> {
             ),
           ),
 
-          // 底部導航區
           Padding(
             padding: const EdgeInsets.fromLTRB(24, 0, 24, 40),
             child: Column(
               children: [
-                // 小圓點指示器
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: List.generate(
@@ -225,10 +265,8 @@ class _OnboardingPageState extends State<OnboardingPage> {
                   ),
                 ),
                 const SizedBox(height: 32),
-
                 Row(
                   children: [
-                    // 上一頁按鈕（第一頁時隱藏）
                     if (_currentPage > 0)
                       Expanded(
                         child: OutlinedButton(
@@ -250,10 +288,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
                           ),
                         ),
                       ),
-
                     if (_currentPage > 0) const SizedBox(width: 12),
-
-                    // 下一步 / 完成按鈕
                     Expanded(
                       child: ElevatedButton(
                         onPressed: () {
@@ -292,17 +327,19 @@ class _OnboardingPageState extends State<OnboardingPage> {
 }
 
 class OnboardingStep {
-  final String emoji;
+  final String? emoji;
   final String title;
   final String description;
   final String? highlightText;
   final String? highlightUrl;
+  final String? imageAsset;
 
   const OnboardingStep({
-    required this.emoji,
+    this.emoji,
     required this.title,
     required this.description,
     this.highlightText,
     this.highlightUrl,
+    this.imageAsset,
   });
 }

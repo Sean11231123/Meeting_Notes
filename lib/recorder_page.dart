@@ -198,7 +198,7 @@ class _RecorderPageState extends State<RecorderPage> {
 
   Future<void> _pickAudioFile() async {
     final result = await FilePicker.platform.pickFiles(
-      type: FileType.audio,
+      type: FileType.any,
       allowMultiple: false,
       withData: kIsWeb,
     );
@@ -206,6 +206,26 @@ class _RecorderPageState extends State<RecorderPage> {
     if (result == null || result.files.isEmpty) return;
 
     final file = result.files.first;
+
+    // 檢查副檔名是否為音訊格式
+    final ext = file.name.split('.').last.toLowerCase();
+    const supportedFormats = [
+      'mp3',
+      'm4a',
+      'wav',
+      'webm',
+      'ogg',
+      'aac',
+      'flac',
+    ];
+    if (!supportedFormats.contains(ext)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('不支援的格式：.$ext\n請上傳 mp3、m4a、wav 等音訊檔案')),
+        );
+      }
+      return; // ← 這裡要 return，不繼續執行
+    }
 
     setState(() {
       _uploadedFileName = file.name;
