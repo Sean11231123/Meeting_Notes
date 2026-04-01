@@ -98285,7 +98285,7 @@ if(l==null||J.fR(l.a)){s=1
 break}o=J.nY(l.a)
 n=A.l.gR(o.b.split(".")).toLowerCase()
 if(!A.l.u(A.aKO,n)){m=p.c
-if(m!=null)m.ah(t.Pu).f.k5(B.Ge(null,null,null,null,null,A.an,null,B.bh("\u4e0d\u652f\u63f4\u7684\u683c\u5f0f\uff1a."+n+"\n\u8acb\u4e0a\u50b3 mp3\u3001m4a\u3001wav \u7b49\u97f3\u8a0a\u6a94\u6848",null,null,null,null,null,null),null,A.d_,null,null,null,null,null,null,null,null,null,null))
+if(m!=null)m.ah(t.Pu).f.k5(B.Ge(null,null,null,null,null,A.an,null,B.bh("\u4e0d\u652f\u63f4 ."+n+" \u683c\u5f0f\n\u8acb\u5c07\u6a94\u6848\u8f49\u63db\u70ba mp3 \u6216 wav \u5f8c\u518d\u4e0a\u50b3",null,null,null,null,null,null),null,A.d_,null,null,null,null,null,null,null,null,null,null))
 s=1
 break}p.ag(new B.aAP(p,o))
 case 1:return B.C(q,r)}})
@@ -98520,13 +98520,13 @@ s.as="web_upload"
 s.Q="\u5df2\u9078\u53d6\uff1a"+q+"\n\u6309\u4e0b AI \u5206\u6790\u958b\u59cb\u6574\u7406\u3002"},
 $S:0}
 B.aAD.prototype={
-$1(a){var s="audio/mpeg"
+$1(a){var s="audio/mpeg",r="audio/aac"
 switch(A.l.gR(a.split(".")).toLowerCase()){case"mp3":return s
-case"m4a":return"audio/mp4"
+case"m4a":return r
 case"wav":return"audio/wav"
 case"webm":return"audio/webm"
 case"ogg":return"audio/ogg"
-case"aac":return"audio/aac"
+case"aac":return r
 case"flac":return"audio/flac"
 default:return s}},
 $S:25}
