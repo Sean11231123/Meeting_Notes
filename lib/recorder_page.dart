@@ -221,7 +221,7 @@ class _RecorderPageState extends State<RecorderPage> {
     if (!supportedFormats.contains(ext)) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('不支援的格式：.$ext\n請上傳 mp3、m4a、wav 等音訊檔案')),
+          SnackBar(content: Text('不支援 .$ext 格式\n請將檔案轉換為 mp3 或 wav 後再上傳')),
         );
       }
       return; // ← 這裡要 return，不繼續執行
@@ -253,7 +253,7 @@ class _RecorderPageState extends State<RecorderPage> {
         case 'mp3':
           return 'audio/mpeg';
         case 'm4a':
-          return 'audio/mp4';
+          return 'audio/aac';
         case 'wav':
           return 'audio/wav';
         case 'webm':
