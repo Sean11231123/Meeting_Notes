@@ -253,7 +253,7 @@ class _RecorderPageState extends State<RecorderPage> {
         case 'mp3':
           return 'audio/mpeg';
         case 'm4a':
-          return 'audio/aac';
+          return 'audio/mp4';
         case 'wav':
           return 'audio/wav';
         case 'webm':
@@ -316,7 +316,7 @@ class _RecorderPageState extends State<RecorderPage> {
                 : 'audio/webm',
             fileName: _uploadedFileName ?? 'recording.webm',
           );
-          setState(() => _statusText = '等待 Google 處理音訊...');
+          setState(() => _statusText = '等待 Google 處理音訊...（請等待處理完再離開）');
           await fileService.waitUntilActive(fileUri);
         }
       } else {

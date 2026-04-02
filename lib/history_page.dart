@@ -264,7 +264,10 @@ class _HistoryDetailPageState extends State<HistoryDetailPage> {
             itemBuilder: (_) => const [
               PopupMenuItem(value: 'txt', child: Text('📄 下載 TXT')),
               PopupMenuItem(value: 'pdf', child: Text('📕 下載 PDF')),
-              PopupMenuItem(value: 'word', child: Text('📘 下載 Word')),
+              PopupMenuItem(
+                value: 'word',
+                child: Text('📄 下載 HTML（可用 Word 開啟）'),
+              ),
             ],
           ),
         ],
@@ -322,4 +325,3 @@ class _HistoryDetailPageState extends State<HistoryDetailPage> {
     );
   }
 }
-

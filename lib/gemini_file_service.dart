@@ -123,7 +123,7 @@ class GeminiFileService {
     String prompt,
     String model,
   ) async {
-    final mimeType = fileUri.contains('.webm') ? 'audio/webm' : 'audio/wav';
+    final mimeType = _mimeTypeFromUri(fileUri);
 
     const proxyBase = 'https://gemini-proxy.sean9611231123.workers.dev/proxy';
     const directBase = 'https://generativelanguage.googleapis.com';
@@ -154,5 +154,18 @@ class GeminiFileService {
     final text =
         json['candidates']?[0]?['content']?['parts']?[0]?['text'] as String?;
     return text ?? '無法取得分析結果';
+  }
+
+  /// 從 file URI 或檔名推斷正確的 MIME type
+  static String _mimeTypeFromUri(String uri) {
+    final lower = uri.toLowerCase();
+    if (lower.contains('.m4a')) return 'audio/mp4';
+    if (lower.contains('.mp4')) return 'audio/mp4';
+    if (lower.contains('.webm')) return 'audio/webm';
+    if (lower.contains('.mp3')) return 'audio/mpeg';
+    if (lower.contains('.aac')) return 'audio/aac';
+    if (lower.contains('.ogg')) return 'audio/ogg';
+    if (lower.contains('.flac')) return 'audio/flac';
+    return 'audio/wav'; // 預設
   }
 }
