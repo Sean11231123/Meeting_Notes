@@ -1,26 +1,34 @@
-import 'dart:io';
 import 'dart:async';
+
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:record/record.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
+import 'package:google_generative_ai/google_generative_ai.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:google_generative_ai/google_generative_ai.dart';
-import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
+import 'package:record/record.dart';
 import 'package:share_plus/share_plus.dart';
-import 'templates.dart';
-import 'history_service.dart';
-import 'history_page.dart';
-import 'gemini_file_service.dart';
-import 'transitions.dart';
-import 'settings_page.dart';
+
 import 'animated_button.dart';
-import 'recording_visualizer.dart';
-import 'package:flutter/foundation.dart';
-import 'web_recorder.dart' if (dart.library.io) 'web_recorder_stub.dart';
+import 'audio_file_stub.dart' if (dart.library.io) 'audio_file_io.dart';
+import 'audio_mime.dart';
+import 'error_utils.dart';
+import 'gemini_file_service.dart';
+import 'history_page.dart';
+import 'history_service.dart';
 import 'key_storage.dart';
+import 'model_settings.dart';
+import 'pending_audio_service.dart';
+import 'platform_support_stub.dart'
+    if (dart.library.io) 'platform_support_io.dart';
+import 'recording_visualizer.dart';
+import 'settings_page.dart';
+import 'templates.dart';
+import 'transitions.dart';
 import 'update_service.dart';
-import 'package:file_picker/file_picker.dart';
+import 'web_recorder.dart' if (dart.library.io) 'web_recorder_stub.dart';
 
 class RecorderPage extends StatefulWidget {
   const RecorderPage({super.key});
@@ -30,33 +38,116 @@ class RecorderPage extends StatefulWidget {
 }
 
 class _RecorderPageState extends State<RecorderPage> {
-  final AudioRecorder _recorder = AudioRecorder();
-  final WebRecorder _webRecorder = WebRecorder();
-  Uint8List? _webAudioBytes;
-  Timer? _timer;
-  String? _uploadedFileName;
-  int _recordSeconds = 0;
   static const _serviceChannel = MethodChannel(
     'com.example.meeting_notes/recording_service',
   );
+  static const _inlineLimitBytes = 20 * 1024 * 1024;
+
+  final AudioRecorder _recorder = AudioRecorder();
+  final WebRecorder _webRecorder = WebRecorder();
+  Timer? _timer;
+
+  bool _isRecording = false;
+  bool _isAnalyzing = false;
+  int _recordSeconds = 0;
+
+  String _statusText = '準備錄音或上傳音檔';
+  String? _lastFilePath;
+  Uint8List? _webAudioBytes;
+  String? _uploadedFileName;
+  String? _currentMimeType;
+  PendingAudio? _pendingAudio;
+  String? _analysisResult;
+  MeetingTemplate _selectedTemplate = kTemplates[0];
 
   @override
   void initState() {
     super.initState();
+    _restorePendingAudio();
     Future.delayed(const Duration(seconds: 2), () {
       if (mounted) UpdateService.checkForUpdate(context);
     });
   }
 
-  bool _isRecording = false;
-  bool _isAnalyzing = false;
-  String _statusText = '按下按鈕開始錄音';
-  String? _lastFilePath;
-  String? _analysisResult;
-  MeetingTemplate _selectedTemplate = kTemplates[0];
-  String _noteName = '';
+  bool get _hasAudio => _lastFilePath != null || _webAudioBytes != null;
 
-  // 停止錄音後彈出設定視窗，讓使用者選模板與命名
+  Future<void> _restorePendingAudio() async {
+    final pending = await PendingAudioService.load();
+    if (pending == null || !mounted) return;
+
+    setState(() {
+      _pendingAudio = pending;
+      _uploadedFileName = pending.fileName;
+      _currentMimeType = pending.mimeType;
+      if (pending.isWebBytes) {
+        _webAudioBytes = pending.bytes;
+        _lastFilePath = pending.bytes == null ? null : 'web_pending';
+      } else {
+        _lastFilePath = pending.path;
+        _webAudioBytes = null;
+      }
+      _statusText = '偵測到尚未完成分析的音檔，是否重新分析？';
+    });
+  }
+
+  Future<void> _savePendingWebBytes(
+    Uint8List bytes,
+    String fileName,
+    String mimeType,
+  ) async {
+    final persisted = await PendingAudioService.saveWebBytes(
+      bytes: bytes,
+      fileName: fileName,
+      mimeType: mimeType,
+    );
+    _pendingAudio = PendingAudio(
+      source: 'web_bytes',
+      fileName: fileName,
+      mimeType: mimeType,
+      bytes: bytes,
+      createdAt: DateTime.now(),
+    );
+    if (!persisted) {
+      _statusText = '音檔已暫時保留，可直接重試分析。Web 版大型音檔重新整理後無法復原。';
+    }
+  }
+
+  Future<void> _savePendingNativePath(
+    String path,
+    String fileName,
+    String mimeType,
+  ) async {
+    await PendingAudioService.saveNative(
+      path: path,
+      fileName: fileName,
+      mimeType: mimeType,
+    );
+    _pendingAudio = PendingAudio(
+      source: 'native_path',
+      fileName: fileName,
+      mimeType: mimeType,
+      path: path,
+      createdAt: DateTime.now(),
+    );
+  }
+
+  Future<void> _clearPendingAudio({bool deleteFile = false}) async {
+    final path = _pendingAudio?.path;
+    await PendingAudioService.clear();
+    if (deleteFile && path != null) {
+      await deleteAudioFile(path);
+    }
+    if (!mounted) return;
+    setState(() {
+      _pendingAudio = null;
+      _lastFilePath = null;
+      _webAudioBytes = null;
+      _uploadedFileName = null;
+      _currentMimeType = null;
+      _statusText = '準備錄音或上傳音檔';
+    });
+  }
+
   Future<void> _showAnalysisSettingsDialog() async {
     List<MeetingTemplate> selectedTemplates = [kTemplates[0]];
     final nameController = TextEditingController(
@@ -68,17 +159,12 @@ class _RecorderPageState extends State<RecorderPage> {
       barrierDismissible: false,
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          backgroundColor: Theme.of(context).colorScheme.surface,
-          title: Text(
-            '選擇分析設定',
-            style: TextStyle(color: Theme.of(context).colorScheme.onSurface),
-          ),
+          title: const Text('分析設定'),
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // 筆記名稱
                 const Text(
                   '筆記名稱',
                   style: TextStyle(fontWeight: FontWeight.bold),
@@ -88,18 +174,17 @@ class _RecorderPageState extends State<RecorderPage> {
                   controller: nameController,
                   decoration: const InputDecoration(
                     border: OutlineInputBorder(),
-                    hintText: '輸入筆記名稱',
+                    hintText: '請輸入筆記名稱',
                   ),
                 ),
                 const SizedBox(height: 20),
-                // 模板選擇（多選）
                 const Text(
-                  '選擇模板（可多選）',
+                  '選擇模板（可複選）',
                   style: TextStyle(fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 4),
                 const Text(
-                  '每個模板會分別整理一份摘要',
+                  '每個模板都會產生一份分析結果',
                   style: TextStyle(fontSize: 12, color: Colors.grey),
                 ),
                 const SizedBox(height: 12),
@@ -149,6 +234,7 @@ class _RecorderPageState extends State<RecorderPage> {
                             const SizedBox(height: 4),
                             Text(
                               template.name,
+                              textAlign: TextAlign.center,
                               style: TextStyle(
                                 fontSize: 12,
                                 fontWeight: FontWeight.w600,
@@ -173,10 +259,6 @@ class _RecorderPageState extends State<RecorderPage> {
             ),
             ElevatedButton(
               onPressed: () => Navigator.pop(context, true),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Theme.of(context).colorScheme.primary,
-                foregroundColor: Theme.of(context).colorScheme.onPrimary,
-              ),
               child: Text(
                 selectedTemplates.length > 1
                     ? '分析 ${selectedTemplates.length} 個模板'
@@ -202,44 +284,53 @@ class _RecorderPageState extends State<RecorderPage> {
       allowMultiple: false,
       withData: kIsWeb,
     );
-
     if (result == null || result.files.isEmpty) return;
 
     final file = result.files.first;
-
-    // 檢查副檔名是否為音訊格式
-    final ext = file.name.split('.').last.toLowerCase();
-    const supportedFormats = [
-      'mp3',
-      'm4a',
-      'wav',
-      'webm',
-      'ogg',
-      'aac',
-      'flac',
-    ];
-    if (!supportedFormats.contains(ext)) {
+    final mimeType = AudioMime.fromFileName(file.name);
+    if (mimeType == null) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('不支援 .$ext 格式\n請將檔案轉換為 mp3 或 wav 後再上傳')),
+          SnackBar(content: Text('不支援此音檔格式。請使用：${AudioMime.supportedList()}')),
         );
       }
-      return; // ← 這裡要 return，不繼續執行
+      return;
     }
 
+    if (kIsWeb) {
+      final bytes = file.bytes;
+      if (bytes == null) {
+        setState(() => _statusText = '無法讀取音檔，請重新選擇。');
+        return;
+      }
+      await _savePendingWebBytes(bytes, file.name, mimeType);
+      setState(() {
+        _uploadedFileName = file.name;
+        _currentMimeType = mimeType;
+        _webAudioBytes = bytes;
+        _lastFilePath = 'web_upload';
+        _analysisResult = null;
+        _statusText = _statusText.startsWith('音檔已暫時保留')
+            ? _statusText
+            : '已選擇 ${file.name}\n可開始 AI 分析';
+      });
+      return;
+    }
+
+    if (file.path == null) {
+      setState(() => _statusText = '無法讀取音檔路徑，請重新選擇。');
+      return;
+    }
+
+    final pendingPath = await copyAudioToPending(file.path!, file.name);
+    await _savePendingNativePath(pendingPath, file.name, mimeType);
     setState(() {
       _uploadedFileName = file.name;
+      _currentMimeType = mimeType;
+      _lastFilePath = pendingPath;
+      _webAudioBytes = null;
       _analysisResult = null;
-
-      if (kIsWeb) {
-        _webAudioBytes = file.bytes;
-        _lastFilePath = 'web_upload';
-      } else {
-        _lastFilePath = file.path;
-        _webAudioBytes = null;
-      }
-
-      _statusText = '已選取：${file.name}\n按下 AI 分析開始整理。';
+      _statusText = '已選擇 ${file.name}\n可開始 AI 分析';
     });
   }
 
@@ -247,260 +338,7 @@ class _RecorderPageState extends State<RecorderPage> {
     List<MeetingTemplate> templates,
     String noteName,
   ) async {
-    String _getMimeType(String fileName) {
-      final ext = fileName.split('.').last.toLowerCase();
-      switch (ext) {
-        case 'mp3':
-          return 'audio/mpeg';
-        case 'm4a':
-          return 'audio/mp4';
-        case 'wav':
-          return 'audio/wav';
-        case 'webm':
-          return 'audio/webm';
-        case 'ogg':
-          return 'audio/ogg';
-        case 'aac':
-          return 'audio/aac';
-        case 'flac':
-          return 'audio/flac';
-        default:
-          return 'audio/mpeg';
-      }
-    }
-
-    if (_lastFilePath == null) return;
-
-    setState(() {
-      _isAnalyzing = true;
-      _analysisResult = null;
-      _statusText = 'AI 分析中（${templates.length} 個模板）...';
-    });
-
-    try {
-      final apiKey = await KeyStorage.read();
-      if (apiKey == null || apiKey.isEmpty) {
-        setState(() {
-          _isAnalyzing = false;
-          _statusText = '找不到 API Key，請重新設定';
-        });
-        return;
-      }
-
-      const modelName = 'gemini-2.5-flash';
-      Uint8List? audioBytes;
-      String? fileUri;
-
-      if (kIsWeb) {
-        if (_webAudioBytes == null) {
-          setState(() {
-            _isAnalyzing = false;
-            _statusText = '找不到錄音資料，請重新錄音';
-          });
-          return;
-        }
-        final fileSizeMB = _webAudioBytes!.length / (1024 * 1024);
-        if (fileSizeMB <= 20) {
-          // 小檔案直接送
-          audioBytes = _webAudioBytes;
-        } else {
-          // 大檔案用 File API 上傳
-          final fileService = GeminiFileService(apiKey);
-          setState(
-            () => _statusText = '上傳音訊中（${fileSizeMB.toStringAsFixed(0)}MB）...',
-          );
-          fileUri = await fileService.uploadAudioBytes(
-            _webAudioBytes!,
-            mimeType: _uploadedFileName != null
-                ? _getMimeType(_uploadedFileName!)
-                : 'audio/webm',
-            fileName: _uploadedFileName ?? 'recording.webm',
-          );
-          setState(() => _statusText = '等待 Google 處理音訊...（請等待處理完再離開）');
-          await fileService.waitUntilActive(fileUri);
-        }
-      } else {
-        final audioFile = File(_lastFilePath!);
-        final fileSize = await audioFile.length();
-        final fileSizeMB = fileSize / (1024 * 1024);
-
-        if (fileSizeMB <= 20) {
-          audioBytes = await audioFile.readAsBytes();
-        } else {
-          final fileService = GeminiFileService(apiKey);
-          setState(
-            () => _statusText = '上傳音訊中（${fileSizeMB.toStringAsFixed(0)}MB）...',
-          );
-          fileUri = await fileService.uploadAudio(audioFile);
-          setState(() => _statusText = '等待 Google 處理音訊...');
-          await fileService.waitUntilActive(fileUri);
-        }
-      }
-
-      // 對每個模板分別分析
-      final List<String> results = [];
-      for (int i = 0; i < templates.length; i++) {
-        final template = templates[i];
-        setState(
-          () => _statusText =
-              'AI 分析中（${i + 1}/${templates.length}）：${template.name}...',
-        );
-
-        final enhancedPrompt =
-            '''
-${template.prompt}
-
----
-請務必使用以下 Markdown 格式美化輸出：
-1. **標題層級**：使用 # 代表大標題，## 代表各分類標題。
-2. **重點強調**：重要關鍵字請用 **雙星號粗體**。
-3. **結構化**：使用清單符號 `*` 或 `1.` 整理要點。
-4. **互動感**：待辦清單請使用 `- [ ]` 語法。
-5. **視覺分隔**：不同章節間請加入 `---` 分隔線。
-''';
-
-        final model = GenerativeModel(model: modelName, apiKey: apiKey);
-        GenerateContentResponse response;
-
-        if (audioBytes != null) {
-          response = await model.generateContent([
-            Content.multi([
-              DataPart(
-                _uploadedFileName != null
-                    ? _getMimeType(_uploadedFileName!)
-                    : (kIsWeb ? 'audio/webm' : 'audio/wav'),
-                audioBytes,
-              ),
-              TextPart(enhancedPrompt),
-            ]),
-          ]);
-        } else {
-          final fileService = GeminiFileService(apiKey);
-          final result = await fileService.analyzeWithFileUri(
-            fileUri!,
-            enhancedPrompt,
-            modelName,
-          );
-          results.add(result);
-          continue;
-        }
-
-        results.add(response.text ?? '無法取得分析結果');
-      }
-
-      // 合併所有模板結果
-      final combinedResult = results.join('\n\n---\n\n');
-
-      await HistoryService().save(
-        HistoryRecord(
-          id: DateTime.now().millisecondsSinceEpoch.toString(),
-          templateName: noteName,
-          templateIcon: templates.map((t) => t.icon).join(''),
-          result: combinedResult,
-          createdAt: DateTime.now(),
-          templateNames: templates.map((t) => t.name).toList(),
-          templateIcons: templates.map((t) => t.icon).toList(),
-        ),
-      );
-
-      setState(() {
-        _isAnalyzing = false;
-        _analysisResult = combinedResult;
-        _statusText = 'AI 分析完成！';
-      });
-    } catch (e) {
-      setState(() {
-        _isAnalyzing = false;
-        _statusText = '分析失敗：${e.toString()}';
-      });
-    }
-  }
-
-  Future<void> _toggleRecording() async {
-    if (_isRecording) {
-      if (kIsWeb) {
-        // 網頁版：停止並取得音訊 bytes
-        final bytes = await _webRecorder.stop();
-        _webAudioBytes = Uint8List.fromList(bytes);
-        _timer?.cancel();
-        _timer = null;
-
-        final minutes = _recordSeconds ~/ 60;
-        final seconds = _recordSeconds % 60;
-        final duration =
-            '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
-
-        setState(() {
-          _isRecording = false;
-          _lastFilePath = 'web_recording';
-          _statusText = '錄音完成！時長 $duration\n按下 AI 分析開始整理。';
-        });
-      } else {
-        final path = await _recorder.stop();
-        await _serviceChannel.invokeMethod('stopService');
-        _timer?.cancel();
-        _timer = null;
-
-        final minutes = _recordSeconds ~/ 60;
-        final seconds = _recordSeconds % 60;
-        final duration =
-            '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
-
-        setState(() {
-          _isRecording = false;
-          _lastFilePath = path;
-          _statusText = '錄音完成！時長 $duration\n按下 AI 分析開始整理。';
-        });
-      }
-    } else {
-      if (kIsWeb) {
-        // 網頁版：直接讓瀏覽器處理權限
-        final hasPermission = await _webRecorder.hasPermission();
-        if (!hasPermission) {
-          setState(() => _statusText = '需要麥克風權限才能錄音');
-          return;
-        }
-        await _webRecorder.start();
-      } else {
-        final micStatus = await Permission.microphone.request();
-        if (!micStatus.isGranted) {
-          setState(() => _statusText = '需要麥克風權限才能錄音');
-          return;
-        }
-        await Permission.notification.request();
-
-        final dir = await getTemporaryDirectory();
-        final filePath =
-            '${dir.path}/recording_${DateTime.now().millisecondsSinceEpoch}.wav';
-
-        await _recorder.start(
-          const RecordConfig(
-            encoder: AudioEncoder.wav,
-            sampleRate: 16000,
-            numChannels: 1,
-          ),
-          path: filePath,
-        );
-        await _serviceChannel.invokeMethod('startService');
-      }
-
-      _recordSeconds = 0;
-      _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-        setState(() => _recordSeconds++);
-      });
-
-      setState(() {
-        _isRecording = true;
-        _analysisResult = null;
-        _webAudioBytes = null;
-        _statusText = '錄音中...';
-        _lastFilePath = null;
-      });
-    }
-  }
-
-  Future<void> _analyzeRecording() async {
-    if (_lastFilePath == null) return;
+    if (!_hasAudio) return;
 
     setState(() {
       _isAnalyzing = true;
@@ -513,82 +351,257 @@ ${template.prompt}
       if (apiKey == null || apiKey.isEmpty) {
         setState(() {
           _isAnalyzing = false;
-          _statusText = '找不到 API Key，請重新設定';
+          _statusText = '尚未設定 API Key，請先到設定輸入。';
         });
         return;
       }
 
-      final audioFile = File(_lastFilePath!);
-      final fileSize = await audioFile.length();
-      final fileSizeMB = fileSize / (1024 * 1024);
-
-      const modelName = 'gemini-2.5-flash';
-
-      final enhancedPrompt =
-          '''
-${_selectedTemplate.prompt}
-
----
-請務必使用以下 Markdown 格式美化輸出：
-1. **標題層級**：使用 # 代表大標題，## 代表各分類標題。
-2. **重點強調**：重要關鍵字請用 **雙星號粗體**。
-3. **結構化**：使用清單符號 `*` 或 `1.` 整理要點。
-4. **互動感**：待辦清單請使用 `- [ ]` 語法。
-5. **視覺分隔**：不同章節間請加入 `---` 分隔線。
-''';
-
-      String result;
-
-      if (fileSizeMB <= 20) {
-        setState(() => _statusText = '上傳音訊中...');
-        final audioBytes = await audioFile.readAsBytes();
-        final model = GenerativeModel(model: modelName, apiKey: apiKey);
-        final response = await model.generateContent([
-          Content.multi([
-            DataPart('audio/wav', audioBytes),
-            TextPart(enhancedPrompt),
-          ]),
-        ]);
-        result = response.text ?? '無法取得分析結果';
-      } else {
-        final fileService = GeminiFileService(apiKey);
-        setState(
-          () => _statusText = '上傳音訊中（${fileSizeMB.toStringAsFixed(0)}MB）...',
-        );
-        final fileUri = await fileService.uploadAudio(audioFile);
-
-        setState(() => _statusText = '等待 Google 處理音訊...');
-        await fileService.waitUntilActive(fileUri);
-
-        setState(() => _statusText = 'AI 分析中，請稍候...');
-        result = await fileService.analyzeWithFileUri(
-          fileUri,
-          enhancedPrompt,
-          modelName,
-        );
+      final modelName = await ModelSettings.read();
+      final mimeType = _currentMimeType ?? _pendingAudio?.mimeType;
+      if (mimeType == null) {
+        throw GeminiServiceException('不支援此音檔格式');
       }
 
+      Uint8List? audioBytes;
+      String? fileUri;
+      final fileService = GeminiFileService(apiKey);
+
+      if (kIsWeb) {
+        audioBytes = _webAudioBytes;
+        if (audioBytes == null) {
+          throw GeminiServiceException('Web 音檔已不存在，請重新選擇。');
+        }
+        if (audioBytes.length > _inlineLimitBytes) {
+          setState(() => _statusText = '音檔較大，正在上傳...');
+          fileUri = await fileService.uploadAudioBytes(
+            audioBytes,
+            mimeType: mimeType,
+            fileName: _uploadedFileName ?? 'recording.webm',
+          );
+          audioBytes = null;
+          setState(() => _statusText = '音檔處理中...');
+          await fileService.waitUntilActive(fileUri);
+        }
+      } else {
+        final path = _lastFilePath;
+        if (path == null) {
+          throw GeminiServiceException('音檔已不存在，請重新選擇。');
+        }
+        final fileSize = await audioFileLength(path);
+        if (fileSize <= _inlineLimitBytes) {
+          audioBytes = await readAudioFileBytes(path);
+        } else {
+          setState(() => _statusText = '音檔較大，正在上傳...');
+          fileUri = await fileService.uploadAudioPath(
+            path,
+            mimeType: mimeType,
+            fileName: _uploadedFileName ?? 'recording.wav',
+          );
+          setState(() => _statusText = '音檔處理中...');
+          await fileService.waitUntilActive(fileUri);
+        }
+      }
+
+      final results = <String>[];
+      for (int i = 0; i < templates.length; i++) {
+        final template = templates[i];
+        setState(
+          () => _statusText =
+              'AI 分析中 ${i + 1}/${templates.length}：${template.name}',
+        );
+        final prompt = _enhancedPrompt(template);
+        if (audioBytes != null) {
+          final result = await _generateInline(
+            apiKey: apiKey,
+            modelName: modelName,
+            mimeType: mimeType,
+            audioBytes: audioBytes,
+            prompt: prompt,
+          );
+          results.add(result);
+        } else {
+          final result = await fileService.analyzeWithFileUri(
+            fileUri!,
+            prompt,
+            modelName,
+            mimeType: mimeType,
+          );
+          results.add(result);
+        }
+      }
+
+      final combinedResult = results.join('\n\n---\n\n');
+      _selectedTemplate = templates.first;
       await HistoryService().save(
         HistoryRecord(
           id: DateTime.now().millisecondsSinceEpoch.toString(),
-          templateName: _noteName.isEmpty ? _selectedTemplate.name : _noteName,
-          templateIcon: _selectedTemplate.icon,
-          result: result,
+          templateName: noteName,
+          templateIcon: templates.map((t) => t.icon).join(''),
+          result: combinedResult,
           createdAt: DateTime.now(),
+          templateNames: templates.map((t) => t.name).toList(),
+          templateIcons: templates.map((t) => t.icon).toList(),
         ),
       );
 
+      final pendingPath = _pendingAudio?.path;
+      await PendingAudioService.clear();
+      if (pendingPath != null) {
+        await deleteAudioFile(pendingPath);
+      }
       setState(() {
+        _pendingAudio = null;
+        _lastFilePath = null;
+        _webAudioBytes = null;
+        _uploadedFileName = null;
+        _currentMimeType = null;
         _isAnalyzing = false;
-        _analysisResult = result;
-        _statusText = 'AI 分析完成！';
+        _analysisResult = combinedResult;
+        _statusText = 'AI 分析完成';
       });
-    } catch (e) {
+    } catch (error) {
+      debugPrint('Analysis failed: ${sanitizeForDebug(error)}');
+      if (!mounted) return;
       setState(() {
         _isAnalyzing = false;
-        _statusText = '分析失敗：${e.toString()}';
+        _statusText = sanitizeErrorForUser(error);
       });
     }
+  }
+
+  Future<String> _generateInline({
+    required String apiKey,
+    required String modelName,
+    required String mimeType,
+    required Uint8List audioBytes,
+    required String prompt,
+  }) async {
+    return _withInlineRetry(() async {
+      final model = GenerativeModel(model: modelName, apiKey: apiKey);
+      final response = await model
+          .generateContent([
+            Content.multi([DataPart(mimeType, audioBytes), TextPart(prompt)]),
+          ])
+          .timeout(const Duration(seconds: 90));
+      return response.text ?? '未取得分析結果';
+    });
+  }
+
+  Future<String> _withInlineRetry(Future<String> Function() action) async {
+    for (int attempt = 0; attempt < 3; attempt++) {
+      try {
+        return await action();
+      } catch (error) {
+        if (!isTemporaryFailure(error) || attempt == 2) rethrow;
+        await Future.delayed(Duration(milliseconds: 500 * (1 << attempt)));
+      }
+    }
+    throw GeminiServiceException('暫時無法連線', retryable: true);
+  }
+
+  String _enhancedPrompt(MeetingTemplate template) {
+    return '''
+${template.prompt}
+
+---
+請用繁體中文整理成清楚的 Markdown 筆記：
+1. 使用 # 與 ## 建立層級標題。
+2. 使用 **粗體** 標示重點。
+3. 使用條列或編號整理資訊。
+4. 行動項目請使用 - [ ] 格式。
+5. 不同段落可使用 --- 分隔。
+''';
+  }
+
+  Future<void> _toggleRecording() async {
+    if (_isRecording) {
+      if (kIsWeb) {
+        final bytes = Uint8List.fromList(await _webRecorder.stop());
+        await _savePendingWebBytes(bytes, 'recording.webm', 'audio/webm');
+        _timer?.cancel();
+        _timer = null;
+
+        setState(() {
+          _isRecording = false;
+          _uploadedFileName = 'recording.webm';
+          _currentMimeType = 'audio/webm';
+          _webAudioBytes = bytes;
+          _lastFilePath = 'web_recording';
+          _statusText = '錄音完成，可開始 AI 分析';
+        });
+      } else {
+        final path = await _recorder.stop();
+        if (isAndroidPlatform) {
+          await _serviceChannel.invokeMethod('stopService');
+        }
+        _timer?.cancel();
+        _timer = null;
+
+        if (path != null) {
+          final fileName =
+              'recording_${DateTime.now().millisecondsSinceEpoch}.wav';
+          final pendingPath = await copyAudioToPending(path, fileName);
+          await _savePendingNativePath(pendingPath, fileName, 'audio/wav');
+          setState(() {
+            _uploadedFileName = fileName;
+            _currentMimeType = 'audio/wav';
+            _lastFilePath = pendingPath;
+            _webAudioBytes = null;
+            _statusText = '錄音完成，可開始 AI 分析';
+          });
+        }
+
+        setState(() => _isRecording = false);
+      }
+      return;
+    }
+
+    if (kIsWeb) {
+      final hasPermission = await _webRecorder.hasPermission();
+      if (!hasPermission) {
+        setState(() => _statusText = '需要麥克風權限才能錄音。');
+        return;
+      }
+      await _webRecorder.start();
+    } else {
+      final micStatus = await Permission.microphone.request();
+      if (!micStatus.isGranted) {
+        setState(() => _statusText = '需要麥克風權限才能錄音。');
+        return;
+      }
+      if (isAndroidPlatform) {
+        await Permission.notification.request();
+      }
+
+      final dir = await getTemporaryDirectory();
+      final filePath =
+          '${dir.path}/recording_${DateTime.now().millisecondsSinceEpoch}.wav';
+      await _recorder.start(
+        const RecordConfig(
+          encoder: AudioEncoder.wav,
+          sampleRate: 16000,
+          numChannels: 1,
+        ),
+        path: filePath,
+      );
+      if (isAndroidPlatform) {
+        await _serviceChannel.invokeMethod('startService');
+      }
+    }
+
+    _recordSeconds = 0;
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() => _recordSeconds++);
+    });
+
+    setState(() {
+      _isRecording = true;
+      _analysisResult = null;
+      _webAudioBytes = null;
+      _lastFilePath = null;
+      _pendingAudio = null;
+      _statusText = '錄音中...';
+    });
   }
 
   @override
@@ -625,8 +638,6 @@ ${_selectedTemplate.prompt}
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const SizedBox(height: 16),
-
-            // 錄音狀態圖示與計時器
             Center(
               child: Column(
                 children: [
@@ -651,11 +662,7 @@ ${_selectedTemplate.prompt}
                   const SizedBox(height: 16),
                   if (_isRecording) ...[
                     Text(
-                      () {
-                        final m = _recordSeconds ~/ 60;
-                        final s = _recordSeconds % 60;
-                        return '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
-                      }(),
+                      _formatDuration(_recordSeconds),
                       style: const TextStyle(
                         fontSize: 48,
                         fontWeight: FontWeight.bold,
@@ -673,13 +680,12 @@ ${_selectedTemplate.prompt}
                 ],
               ),
             ),
-
-            const SizedBox(height: 32),
-
-            // 錄音按鈕
+            const SizedBox(height: 24),
+            if (_pendingAudio != null && !_isRecording) _pendingAudioCard(),
+            if (_pendingAudio != null && !_isRecording)
+              const SizedBox(height: 16),
             Row(
               children: [
-                // 錄音按鈕
                 Expanded(
                   child: AnimatedButton(
                     onPressed: _isAnalyzing ? null : _toggleRecording,
@@ -704,7 +710,6 @@ ${_selectedTemplate.prompt}
                   ),
                 ),
                 const SizedBox(width: 12),
-                // 上傳音檔按鈕
                 Expanded(
                   child: AnimatedButton(
                     onPressed: _isAnalyzing || _isRecording
@@ -730,9 +735,7 @@ ${_selectedTemplate.prompt}
                 ),
               ],
             ),
-
-            // AI 分析按鈕（停止後才出現）
-            if (_lastFilePath != null) ...[
+            if (_hasAudio) ...[
               const SizedBox(height: 16),
               AnimatedButton(
                 onPressed: _isAnalyzing ? null : _showAnalysisSettingsDialog,
@@ -764,8 +767,6 @@ ${_selectedTemplate.prompt}
                 ),
               ),
             ],
-
-            // 分析結果
             if (_analysisResult != null) ...[
               const SizedBox(height: 32),
               Row(
@@ -793,7 +794,7 @@ ${_selectedTemplate.prompt}
                       border: Border.all(
                         color: Theme.of(
                           context,
-                        ).colorScheme.outline.withOpacity(0.3),
+                        ).colorScheme.outline.withValues(alpha: 0.3),
                       ),
                     ),
                     child: MarkdownBody(
@@ -870,5 +871,56 @@ ${_selectedTemplate.prompt}
         ),
       ),
     );
+  }
+
+  Widget _pendingAudioCard() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              '偵測到尚未完成分析的音檔，是否重新分析？',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              _pendingAudio?.fileName ?? 'pending audio',
+              style: TextStyle(color: Theme.of(context).colorScheme.secondary),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _isAnalyzing
+                        ? null
+                        : _showAnalysisSettingsDialog,
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('重新分析'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                TextButton.icon(
+                  onPressed: _isAnalyzing
+                      ? null
+                      : () => _clearPendingAudio(deleteFile: true),
+                  icon: const Icon(Icons.delete_outline),
+                  label: const Text('刪除'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _formatDuration(int seconds) {
+    final minutes = seconds ~/ 60;
+    final remaining = seconds % 60;
+    return '${minutes.toString().padLeft(2, '0')}:'
+        '${remaining.toString().padLeft(2, '0')}';
   }
 }

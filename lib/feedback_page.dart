@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'error_utils.dart';
+
 class FeedbackPage extends StatefulWidget {
   const FeedbackPage({super.key});
 
@@ -52,10 +54,11 @@ class _FeedbackPageState extends State<FeedbackPage> {
         Navigator.pop(context);
       }
     } catch (e) {
+      debugPrint('Feedback submit failed: ${sanitizeForDebug(e)}');
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('提交失敗：${e.toString()}')));
+        ).showSnackBar(const SnackBar(content: Text('回饋送出失敗，請稍後再試。')));
       }
     } finally {
       if (mounted) setState(() => _isSubmitting = false);

@@ -1,92 +1,102 @@
-import 'dart:io';
+import 'dart:async';
 import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
+import 'audio_file_stub.dart' if (dart.library.io) 'audio_file_io.dart';
+import 'error_utils.dart';
+
 class GeminiFileService {
+  static const _proxyBase =
+      'https://gemini-proxy.sean9611231123.workers.dev/proxy';
+  static const _directBase = 'https://generativelanguage.googleapis.com';
+  static const _requestTimeout = Duration(seconds: 60);
+
   final String apiKey;
   GeminiFileService(this.apiKey);
 
-  // 手機版：從 File 上傳
-  Future<String> uploadAudio(File audioFile) async {
-    final bytes = await audioFile.readAsBytes();
-    return _uploadBytes(bytes, 'audio/wav', audioFile.path.split('/').last);
+  String get _base => kIsWeb ? _proxyBase : _directBase;
+
+  Future<String> uploadAudioPath(
+    String path, {
+    required String mimeType,
+    required String fileName,
+  }) async {
+    final bytes = await readAudioFileBytes(path);
+    return uploadAudioBytes(bytes, mimeType: mimeType, fileName: fileName);
   }
 
-  // 網頁版/上傳檔案：從 Uint8List 上傳
   Future<String> uploadAudioBytes(
     Uint8List bytes, {
-    String mimeType = 'audio/webm',
-    String fileName = 'recording.webm',
+    required String mimeType,
+    required String fileName,
   }) async {
-    return _uploadBytes(bytes, mimeType, fileName);
+    return _withRetry(() => _uploadBytesOnce(bytes, mimeType, fileName));
   }
 
-  // 共用上傳邏輯
-  Future<String> _uploadBytes(
+  Future<String> _uploadBytesOnce(
     Uint8List bytes,
     String mimeType,
     String displayName,
   ) async {
-    // 網頁版走代理，手機版直連
-    const proxyBase = 'https://gemini-proxy.sean9611231123.workers.dev/proxy';
-    const directBase = 'https://generativelanguage.googleapis.com';
-    final base = kIsWeb ? proxyBase : directBase;
-
-    final initResponse = await http.post(
-      Uri.parse(
-        '$base/upload/v1beta/files'
-        '?key=$apiKey&uploadType=resumable',
-      ),
-      headers: {
-        'X-Goog-Upload-Protocol': 'resumable',
-        'X-Goog-Upload-Command': 'start',
-        'X-Goog-Upload-Header-Content-Length': bytes.length.toString(),
-        'X-Goog-Upload-Header-Content-Type': mimeType,
-        'Content-Type': 'application/json',
-      },
-      body: jsonEncode({
-        'file': {'display_name': displayName},
-      }),
-    );
+    final initResponse = await http
+        .post(
+          Uri.parse(
+            '$_base/upload/v1beta/files'
+            '?key=$apiKey&uploadType=resumable',
+          ),
+          headers: {
+            'X-Goog-Upload-Protocol': 'resumable',
+            'X-Goog-Upload-Command': 'start',
+            'X-Goog-Upload-Header-Content-Length': bytes.length.toString(),
+            'X-Goog-Upload-Header-Content-Type': mimeType,
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({
+            'file': {'display_name': displayName},
+          }),
+        )
+        .timeout(_requestTimeout);
 
     if (initResponse.statusCode != 200) {
-      throw Exception('上傳初始化失敗：${initResponse.body}');
+      throw exceptionFromResponse(initResponse, '音檔上傳初始化失敗');
     }
 
     final uploadUrl = initResponse.headers['x-goog-upload-url'];
-    if (uploadUrl == null) throw Exception('找不到上傳 URL');
+    if (uploadUrl == null) {
+      throw GeminiServiceException('音檔上傳初始化失敗');
+    }
 
-    // 網頁版需要把上傳 URL 也換成代理
     final finalUploadUrl = kIsWeb
-        ? uploadUrl.replaceFirst(
-            'https://generativelanguage.googleapis.com',
-            proxyBase,
-          )
+        ? uploadUrl.replaceFirst(_directBase, _proxyBase)
         : uploadUrl;
 
-    final uploadResponse = await http.post(
-      Uri.parse(finalUploadUrl),
-      headers: {
-        'Content-Length': bytes.length.toString(),
-        'X-Goog-Upload-Offset': '0',
-        'X-Goog-Upload-Command': 'upload, finalize',
-      },
-      body: bytes,
-    );
+    final uploadResponse = await http
+        .post(
+          Uri.parse(finalUploadUrl),
+          headers: {
+            'Content-Length': bytes.length.toString(),
+            'X-Goog-Upload-Offset': '0',
+            'X-Goog-Upload-Command': 'upload, finalize',
+          },
+          body: bytes,
+        )
+        .timeout(_requestTimeout);
 
     if (uploadResponse.statusCode != 200) {
-      throw Exception('檔案上傳失敗：${uploadResponse.body}');
+      throw exceptionFromResponse(uploadResponse, '音檔上傳失敗');
     }
 
     final responseJson = jsonDecode(uploadResponse.body);
-    final fileUri = responseJson['file']['uri'] as String?;
-    if (fileUri == null) throw Exception('找不到 file_uri');
+    final fileUri = responseJson['file']?['uri'] as String?;
+    if (fileUri == null) {
+      throw GeminiServiceException('音檔上傳失敗');
+    }
 
     return fileUri;
   }
 
-  // 輪詢等待檔案處理完成
   Future<void> waitUntilActive(String fileUri) async {
     final fileName = fileUri.replaceFirst(
       'https://generativelanguage.googleapis.com/v1beta/',
@@ -96,12 +106,10 @@ class GeminiFileService {
     for (int i = 0; i < 30; i++) {
       await Future.delayed(const Duration(seconds: 5));
 
-      const proxyBase = 'https://gemini-proxy.sean9611231123.workers.dev/proxy';
-      const directBase = 'https://generativelanguage.googleapis.com';
-      final base = kIsWeb ? proxyBase : directBase;
-
-      final response = await http.get(
-        Uri.parse('$base/v1beta/$fileName?key=$apiKey'),
+      final response = await _withRetry(
+        () => http
+            .get(Uri.parse('$_base/v1beta/$fileName?key=$apiKey'))
+            .timeout(_requestTimeout),
       );
 
       if (response.statusCode != 200) continue;
@@ -111,61 +119,64 @@ class GeminiFileService {
       final state = fileData['state'] as String?;
 
       if (state == 'ACTIVE') return;
-      if (state == 'FAILED') throw Exception('檔案處理失敗');
+      if (state == 'FAILED') {
+        throw GeminiServiceException('音檔處理失敗');
+      }
     }
 
-    throw Exception('檔案處理逾時，請稍後再試');
+    throw GeminiServiceException('音檔處理逾時', retryable: true);
   }
 
-  // 用 file_uri 呼叫 Gemini 分析
   Future<String> analyzeWithFileUri(
     String fileUri,
     String prompt,
-    String model,
-  ) async {
-    final mimeType = _mimeTypeFromUri(fileUri);
-
-    const proxyBase = 'https://gemini-proxy.sean9611231123.workers.dev/proxy';
-    const directBase = 'https://generativelanguage.googleapis.com';
-    final base = kIsWeb ? proxyBase : directBase;
-
-    final response = await http.post(
-      Uri.parse('$base/v1beta/models/$model:generateContent?key=$apiKey'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'contents': [
-          {
-            'parts': [
-              {
-                'file_data': {'mime_type': mimeType, 'file_uri': fileUri},
-              },
-              {'text': prompt},
-            ],
-          },
-        ],
-      }),
-    );
-
-    if (response.statusCode != 200) {
-      throw Exception('Gemini 分析失敗：${response.body}');
-    }
+    String model, {
+    required String mimeType,
+  }) async {
+    final response = await _withRetry(() async {
+      final response = await http
+          .post(
+            Uri.parse(
+              '$_base/v1beta/models/$model:generateContent?key=$apiKey',
+            ),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'contents': [
+                {
+                  'parts': [
+                    {
+                      'file_data': {'mime_type': mimeType, 'file_uri': fileUri},
+                    },
+                    {'text': prompt},
+                  ],
+                },
+              ],
+            }),
+          )
+          .timeout(_requestTimeout);
+      if (response.statusCode != 200) {
+        throw exceptionFromResponse(response, 'Gemini 分析失敗');
+      }
+      return response;
+    });
 
     final json = jsonDecode(response.body);
     final text =
         json['candidates']?[0]?['content']?['parts']?[0]?['text'] as String?;
-    return text ?? '無法取得分析結果';
+    return text ?? '未取得分析結果';
   }
 
-  /// 從 file URI 或檔名推斷正確的 MIME type
-  static String _mimeTypeFromUri(String uri) {
-    final lower = uri.toLowerCase();
-    if (lower.contains('.m4a')) return 'audio/mp4';
-    if (lower.contains('.mp4')) return 'audio/mp4';
-    if (lower.contains('.webm')) return 'audio/webm';
-    if (lower.contains('.mp3')) return 'audio/mpeg';
-    if (lower.contains('.aac')) return 'audio/aac';
-    if (lower.contains('.ogg')) return 'audio/ogg';
-    if (lower.contains('.flac')) return 'audio/flac';
-    return 'audio/wav'; // 預設
+  Future<T> _withRetry<T>(Future<T> Function() action) async {
+    Object? lastError;
+    for (int attempt = 0; attempt < 3; attempt++) {
+      try {
+        return await action();
+      } catch (error) {
+        lastError = error;
+        if (!isTemporaryFailure(error) || attempt == 2) rethrow;
+        await Future.delayed(Duration(milliseconds: 500 * (1 << attempt)));
+      }
+    }
+    throw lastError ?? GeminiServiceException('暫時無法連線', retryable: true);
   }
 }

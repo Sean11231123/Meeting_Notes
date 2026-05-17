@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
+import 'error_utils.dart';
 import 'history_service.dart';
 
 // Conditional import: web vs native vs stub
@@ -28,7 +29,8 @@ class DownloadService {
         '${_sanitizeFileName(record.templateName)}.txt',
       );
     } catch (e) {
-      if (context.mounted) _showError(context, e.toString());
+      debugPrint('TXT export failed: ${sanitizeForDebug(e)}');
+      if (context.mounted) _showError(context);
     }
   }
 
@@ -45,7 +47,8 @@ class DownloadService {
         '${_sanitizeFileName(record.templateName)}.pdf',
       );
     } catch (e) {
-      if (context.mounted) _showError(context, e.toString());
+      debugPrint('PDF export failed: ${sanitizeForDebug(e)}');
+      if (context.mounted) _showError(context);
     }
   }
 
@@ -62,7 +65,8 @@ class DownloadService {
         '${_sanitizeFileName(record.templateName)}.html',
       );
     } catch (e) {
-      if (context.mounted) _showError(context, e.toString());
+      debugPrint('HTML export failed: ${sanitizeForDebug(e)}');
+      if (context.mounted) _showError(context);
     }
   }
 
@@ -222,9 +226,9 @@ class DownloadService {
       .replaceAll('<', '&lt;')
       .replaceAll('>', '&gt;');
 
-  static void _showError(BuildContext context, String message) {
+  static void _showError(BuildContext context) {
     ScaffoldMessenger.of(
       context,
-    ).showSnackBar(SnackBar(content: Text('下載失敗：$message')));
+    ).showSnackBar(const SnackBar(content: Text('匯出失敗，請稍後再試。')));
   }
 }

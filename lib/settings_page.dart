@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'theme_provider.dart';
-import 'api_key_page.dart';
-import 'transitions.dart';
-import 'feedback_page.dart';
 import 'package:url_launcher/url_launcher.dart';
+
+import 'api_key_page.dart';
+import 'feedback_page.dart';
+import 'model_settings.dart';
+import 'theme_provider.dart';
+import 'transitions.dart';
 
 class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key});
@@ -18,8 +20,7 @@ class SettingsPage extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.all(24),
         children: [
-          // API Key 區塊
-          _SectionHeader(title: 'API 設定'),
+          const _SectionHeader(title: 'API 設定'),
           const SizedBox(height: 12),
           _SettingsTile(
             icon: Icons.key_outlined,
@@ -30,34 +31,27 @@ class SettingsPage extends StatelessWidget {
               SlideRoute(page: const ApiKeyPage(isUpdate: true)),
             ),
           ),
-
+          const SizedBox(height: 12),
+          const _ModelSelector(),
           const SizedBox(height: 32),
-
-          // 主題區塊
-          _SectionHeader(title: '外觀'),
+          const _SectionHeader(title: '外觀'),
           const SizedBox(height: 12),
           _ThemeSelector(themeProvider: themeProvider),
-
           const SizedBox(height: 32),
-
-          // 意見反饋區塊
           _SettingsTile(
             icon: Icons.feedback_outlined,
-            title: '提供意見 / 回報問題',
+            title: '意見回饋 / 問題回報',
             subtitle: '告訴我們你的想法或遇到的問題',
             onTap: () =>
                 Navigator.push(context, SlideRoute(page: const FeedbackPage())),
           ),
-
           const SizedBox(height: 32),
-
-          // 關於區塊（新增）
-          _SectionHeader(title: '關於'),
+          const _SectionHeader(title: '關於'),
           const SizedBox(height: 12),
           _SettingsTile(
             icon: Icons.code,
-            title: '開源專案',
-            subtitle: '在 GitHub 上查看原始碼',
+            title: '原始碼',
+            subtitle: '在 GitHub 查看專案',
             onTap: () async {
               final uri = Uri.parse(
                 'https://github.com/Sean11231123/Meeting_Notes',
@@ -72,7 +66,70 @@ class SettingsPage extends StatelessWidget {
     );
   }
 }
- 
+
+class _ModelSelector extends StatefulWidget {
+  const _ModelSelector();
+
+  @override
+  State<_ModelSelector> createState() => _ModelSelectorState();
+}
+
+class _ModelSelectorState extends State<_ModelSelector> {
+  String _selectedModel = ModelSettings.defaultModel;
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final model = await ModelSettings.read();
+    if (!mounted) return;
+    setState(() {
+      _selectedModel = model;
+      _isLoading = false;
+    });
+  }
+
+  Future<void> _setModel(String? model) async {
+    if (model == null) return;
+    await ModelSettings.write(model);
+    if (!mounted) return;
+    setState(() => _selectedModel = model);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: ListTile(
+        leading: Icon(
+          Icons.auto_awesome,
+          color: Theme.of(context).colorScheme.onSurface,
+        ),
+        title: const Text('Gemini 模型'),
+        subtitle: _isLoading
+            ? const Text('讀取中...')
+            : DropdownButton<String>(
+                value: _selectedModel,
+                isExpanded: true,
+                underline: const SizedBox.shrink(),
+                items: ModelSettings.options
+                    .map(
+                      (option) => DropdownMenuItem(
+                        value: option.id,
+                        child: Text(option.label),
+                      ),
+                    )
+                    .toList(),
+                onChanged: _setModel,
+              ),
+      ),
+    );
+  }
+}
+
 class _SectionHeader extends StatelessWidget {
   final String title;
   const _SectionHeader({required this.title});
@@ -145,14 +202,14 @@ class _ThemeSelector extends StatelessWidget {
             const Divider(height: 1, indent: 56),
             _ThemeOption(
               icon: Icons.light_mode_outlined,
-              title: '亮色模式',
+              title: '淺色模式',
               isSelected: themeProvider.themeMode == ThemeMode.light,
               onTap: () => themeProvider.setThemeMode(ThemeMode.light),
             ),
             const Divider(height: 1, indent: 56),
             _ThemeOption(
               icon: Icons.dark_mode_outlined,
-              title: '暗色模式',
+              title: '深色模式',
               isSelected: themeProvider.themeMode == ThemeMode.dark,
               onTap: () => themeProvider.setThemeMode(ThemeMode.dark),
             ),
