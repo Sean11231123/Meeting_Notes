@@ -1,5 +1,5 @@
 {
-  "version": "1.3.4",
-  "message": "修復 Gemini 分析失敗時音檔保留、模型切換、API Key 錯誤訊息外洩、Web 相容性與音訊 MIME 判斷問題",
+  "version": "1.4.0",
+  "message": "全新模板設計（課堂筆記、討論記錄、口說練習、訪談 & 田野）、所有分析自動產生逐字稿（含說話者識別）、下載選單新增逐字稿 TXT 下載",
   "url": "https://github.com/Sean11231123/Meeting_Notes/releases/latest"
 }

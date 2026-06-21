@@ -7,9 +7,11 @@ class HistoryRecord {
   final String templateIcon;
   final String result;
   final DateTime createdAt;
-  // 新增：支援多模板
+  // 支援多模板
   final List<String> templateNames;
   final List<String> templateIcons;
+  // 逐字稿（含說話者識別），僅供下載，不顯示於 UI
+  final String? transcript;
 
   HistoryRecord({
     required this.id,
@@ -19,6 +21,7 @@ class HistoryRecord {
     required this.createdAt,
     List<String>? templateNames,
     List<String>? templateIcons,
+    this.transcript,
   }) : templateNames = templateNames ?? [templateName],
        templateIcons = templateIcons ?? [templateIcon];
 
@@ -30,6 +33,7 @@ class HistoryRecord {
     'templateIcons': templateIcons,
     'result': result,
     'createdAt': createdAt.toIso8601String(),
+    if (transcript != null) 'transcript': transcript,
   };
 
   factory HistoryRecord.fromJson(Map<String, dynamic> json) {
@@ -52,6 +56,8 @@ class HistoryRecord {
               ?.map((e) => e as String)
               .toList() ??
           [templateIcon],
+      // 資料遷移：舊紀錄沒有 transcript 則為 null
+      transcript: json['transcript'] as String?,
     );
   }
 
