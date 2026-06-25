@@ -10,8 +10,6 @@ class HistoryRecord {
   // 支援多模板
   final List<String> templateNames;
   final List<String> templateIcons;
-  // 逐字稿（含說話者識別），僅供下載，不顯示於 UI
-  final String? transcript;
 
   HistoryRecord({
     required this.id,
@@ -21,7 +19,6 @@ class HistoryRecord {
     required this.createdAt,
     List<String>? templateNames,
     List<String>? templateIcons,
-    this.transcript,
   }) : templateNames = templateNames ?? [templateName],
        templateIcons = templateIcons ?? [templateIcon];
 
@@ -33,7 +30,7 @@ class HistoryRecord {
     'templateIcons': templateIcons,
     'result': result,
     'createdAt': createdAt.toIso8601String(),
-    if (transcript != null) 'transcript': transcript,
+    // transcript 欄位已移除，不再寫入
   };
 
   factory HistoryRecord.fromJson(Map<String, dynamic> json) {
@@ -56,8 +53,7 @@ class HistoryRecord {
               ?.map((e) => e as String)
               .toList() ??
           [templateIcon],
-      // 資料遷移：舊紀錄沒有 transcript 則為 null
-      transcript: json['transcript'] as String?,
+      // 注意：舊紀錄的 transcript 欄位在讀取時直接忽略
     );
   }
 

@@ -4,7 +4,9 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'api_key_page.dart';
 import 'feedback_page.dart';
+import 'gemini_model_service.dart';
 import 'model_settings.dart';
+import 'key_storage.dart';
 import 'theme_provider.dart';
 import 'transitions.dart';
 
@@ -75,8 +77,10 @@ class _ModelSelector extends StatefulWidget {
 }
 
 class _ModelSelectorState extends State<_ModelSelector> {
-  String _selectedModel = ModelSettings.defaultModel;
+  String _selectedModel = kDefaultModelId;
+  List<GeminiModel> _models = [];
   bool _isLoading = true;
+  bool _fetchFailed = false;
 
   @override
   void initState() {
@@ -85,19 +89,57 @@ class _ModelSelectorState extends State<_ModelSelector> {
   }
 
   Future<void> _load() async {
-    final model = await ModelSettings.read();
+    final savedModel = await ModelSettings.read();
+
+    // 嘗試從 API 動態取得最新模型清單
+    final apiKey = await KeyStorage.read() ?? '';
+    List<GeminiModel> models = [];
+    bool failed = false;
+
+    if (apiKey.isNotEmpty) {
+      models = await GeminiModelService.fetchAvailableModels(apiKey);
+    }
+
+    if (models.isEmpty) {
+      // API 失敗或 key 未設定，使用 fallback 清單
+      failed = true;
+      models = kFallbackModelIds
+          .map((id) => GeminiModel(id: id, displayName: _fallbackLabel(id)))
+          .cast<GeminiModel>()
+          .toList();
+    }
+
+    // 若儲存的模型不在新清單中，回退到清單第一個
+    final validModel = models.any((m) => m.id == savedModel)
+        ? savedModel
+        : models.first.id;
+
     if (!mounted) return;
     setState(() {
-      _selectedModel = model;
+      _models = models;
+      _selectedModel = validModel;
       _isLoading = false;
+      _fetchFailed = failed;
     });
   }
 
-  Future<void> _setModel(String? model) async {
-    if (model == null) return;
-    await ModelSettings.write(model);
+  Future<void> _setModel(String? modelId) async {
+    if (modelId == null) return;
+    await ModelSettings.write(modelId);
     if (!mounted) return;
-    setState(() => _selectedModel = model);
+    setState(() => _selectedModel = modelId);
+  }
+
+  String _fallbackLabel(String id) {
+    // 轉換 model id 為可讀名稱（fallback 時用）
+    return id
+        .replaceFirst('gemini-', 'Gemini ')
+        .replaceAll('-', ' ')
+        .split(' ')
+        .map(
+          (w) => w.isNotEmpty ? '${w[0].toUpperCase()}${w.substring(1)}' : '',
+        )
+        .join(' ');
   }
 
   @override
@@ -110,20 +152,36 @@ class _ModelSelectorState extends State<_ModelSelector> {
         ),
         title: const Text('Gemini 模型'),
         subtitle: _isLoading
-            ? const Text('讀取中...')
-            : DropdownButton<String>(
-                value: _selectedModel,
-                isExpanded: true,
-                underline: const SizedBox.shrink(),
-                items: ModelSettings.options
-                    .map(
-                      (option) => DropdownMenuItem(
-                        value: option.id,
-                        child: Text(option.label),
+            ? const Text('載入模型清單中...')
+            : Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  DropdownButton<String>(
+                    value: _selectedModel,
+                    isExpanded: true,
+                    underline: const SizedBox.shrink(),
+                    items: _models
+                        .map(
+                          (m) => DropdownMenuItem(
+                            value: m.id,
+                            child: Text(m.displayName),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: _setModel,
+                  ),
+                  if (_fetchFailed)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2, bottom: 4),
+                      child: Text(
+                        '無法取得最新模型清單，顯示預設選項',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Theme.of(context).colorScheme.error,
+                        ),
                       ),
-                    )
-                    .toList(),
-                onChanged: _setModel,
+                    ),
+                ],
               ),
       ),
     );

@@ -52,38 +52,6 @@ class DownloadService {
     }
   }
 
-  // ─── Transcript TXT ──────────────────────────────────────────────────
-  static Future<void> downloadTranscriptTxt(
-    BuildContext context,
-    HistoryRecord record,
-  ) async {
-    final transcript = record.transcript;
-    if (transcript == null || transcript.isEmpty) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('此筆紀錄沒有逐字稿（可能為舊版分析結果）')));
-      }
-      return;
-    }
-    try {
-      final content =
-          '${record.templateIcon} ${record.templateName} — 逐字稿\n'
-          '日期：${_formatDate(record.createdAt)}\n'
-          '${'=' * 40}\n\n'
-          '$transcript\n';
-
-      await platformDownloadText(
-        content,
-        'text/plain;charset=utf-8',
-        '${_sanitizeFileName(record.templateName)}_逐字稿.txt',
-      );
-    } catch (e) {
-      debugPrint('Transcript TXT export failed: ${sanitizeForDebug(e)}');
-      if (context.mounted) _showError(context);
-    }
-  }
-
   // ─── Word ─────────────────────────────────────────────────────────────
   static Future<void> downloadWord(
     BuildContext context,

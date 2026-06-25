@@ -255,7 +255,6 @@ class _HistoryDetailPageState extends State<HistoryDetailPage> {
                 createdAt: widget.record.createdAt,
                 templateNames: widget.record.templateNames,
                 templateIcons: widget.record.templateIcons,
-                transcript: widget.record.transcript,
               );
               if (format == 'txt')
                 await DownloadService.downloadTxt(context, updatedRecord);
@@ -263,11 +262,7 @@ class _HistoryDetailPageState extends State<HistoryDetailPage> {
                 await DownloadService.downloadPdf(context, updatedRecord);
               if (format == 'word')
                 await DownloadService.downloadWord(context, updatedRecord);
-              if (format == 'transcript')
-                await DownloadService.downloadTranscriptTxt(
-                  context,
-                  updatedRecord,
-                );
+
             },
             itemBuilder: (_) => const [
               PopupMenuItem(value: 'txt', child: Text('📄 下載筆記 TXT')),
@@ -276,8 +271,7 @@ class _HistoryDetailPageState extends State<HistoryDetailPage> {
                 value: 'word',
                 child: Text('📄 下載筆記 HTML（可用 Word 開啟）'),
               ),
-              PopupMenuDivider(),
-              PopupMenuItem(value: 'transcript', child: Text('📝 下載逐字稿 TXT')),
+
             ],
           ),
         ],

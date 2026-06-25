@@ -19,7 +19,7 @@ const List<MeetingTemplate> kTemplates = [
     id: 'lecture',
     name: '課堂筆記',
     icon: '📖',
-    description: '適合上課、演講、線上課程',
+    description: '老師上課、演講、線上課程',
     prompt: '''
 你是一位專業的課堂助理。請仔細聆聽這段錄音，整理成以下繁體中文格式：
 
@@ -50,7 +50,7 @@ const List<MeetingTemplate> kTemplates = [
     id: 'discussion',
     name: '討論記錄',
     icon: '🗣️',
-    description: '適合小組報告、社團幹部會、多人討論',
+    description: '小組討論、讀書會、會議',
     prompt: '''
 你是一位專業的討論記錄員。請仔細聆聽這段多人討論的錄音，整理成以下繁體中文格式：
 
@@ -78,7 +78,7 @@ const List<MeetingTemplate> kTemplates = [
     id: 'speaking',
     name: '口說練習',
     icon: '🎤',
-    description: '適合英文口說、報告演練、自我錄音複習',
+    description: '英文口說、簡報練習、自我錄音',
     prompt: '''
 你是一位專業的口說教練。請仔細聆聽這段錄音，針對說話者的表達方式給予結構化回饋，整理成以下繁體中文格式：
 
@@ -106,7 +106,7 @@ const List<MeetingTemplate> kTemplates = [
     id: 'interview',
     name: '訪談 & 田野',
     icon: '🔍',
-    description: '適合研究訪談、新聞採訪、課程作業問卷',
+    description: '訪談、田野調查、焦點團體',
     prompt: '''
 你是一位專業的訪談記錄員。請仔細聆聽這段訪談錄音，整理成以下繁體中文格式：
 

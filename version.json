@@ -1,5 +1,5 @@
 {
-  "version": "1.4.0",
-  "message": "全新模板設計（課堂筆記、討論記錄、口說練習、訪談 & 田野）、所有分析自動產生逐字稿（含說話者識別）、下載選單新增逐字稿 TXT 下載",
+  "version": "1.4.1",
+  "message": "dynamic model list, remove transcript, add template descriptions",
   "url": "https://github.com/Sean11231123/Meeting_Notes/releases/latest"
 }

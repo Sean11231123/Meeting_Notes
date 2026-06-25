@@ -243,6 +243,21 @@ class _RecorderPageState extends State<RecorderPage> {
                                     : Theme.of(context).colorScheme.onSurface,
                               ),
                             ),
+                            const SizedBox(height: 3),
+                            Text(
+                              template.description,
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: isSelected
+                                    ? Theme.of(
+                                        context,
+                                      ).colorScheme.onPrimary.withOpacity(0.75)
+                                    : Theme.of(
+                                        context,
+                                      ).colorScheme.onSurface.withOpacity(0.55),
+                              ),
+                            ),
                           ],
                         ),
                       ),
@@ -402,27 +417,7 @@ class _RecorderPageState extends State<RecorderPage> {
         }
       }
 
-      // ── 第一步：產生逐字稿（含說話者識別）──
-      setState(() => _statusText = '正在產生逐字稿...');
-      String transcript;
-      if (audioBytes != null) {
-        transcript = await _generateInline(
-          apiKey: apiKey,
-          modelName: modelName,
-          mimeType: mimeType,
-          audioBytes: audioBytes,
-          prompt: _transcriptPrompt(),
-        );
-      } else {
-        transcript = await fileService.analyzeWithFileUri(
-          fileUri!,
-          _transcriptPrompt(),
-          modelName,
-          mimeType: mimeType,
-        );
-      }
-
-      // ── 第二步：依選擇的模板逐一分析 ──
+      // ── 依選擇的模板逐一分析 ──
       final results = <String>[];
       for (int i = 0; i < templates.length; i++) {
         final template = templates[i];
@@ -462,7 +457,6 @@ class _RecorderPageState extends State<RecorderPage> {
           createdAt: DateTime.now(),
           templateNames: templates.map((t) => t.name).toList(),
           templateIcons: templates.map((t) => t.icon).toList(),
-          transcript: transcript,
         ),
       );
 
@@ -519,19 +513,6 @@ class _RecorderPageState extends State<RecorderPage> {
       }
     }
     throw GeminiServiceException('暫時無法連線', retryable: true);
-  }
-
-  String _transcriptPrompt() {
-    return '''
-你是一位專業的逐字稿記錄員。請仔細聆聽這段錄音，產生完整的繁體中文逐字稿。
-
-規則如下：
-1. 盡量還原錄音中說話的每一句話，不要省略或改寫。
-2. 若錄音中有多位說話者，請以「說話者A：」「說話者B：」等方式標示，若能辨識說話者身份（例如老師、學生、主持人、受訪者等）則直接以身份標示。
-3. 若某段錄音不清楚無法辨識，請以「【聽不清楚】」標示。
-4. 不需要加入任何格式標題，直接輸出純文字逐字稿即可。
-5. 語氣詞（例如「嗯」「啊」「那個」）可適度保留以反映真實對話，但過多重複時可酌情省略。
-''';
   }
 
   String _enhancedPrompt(MeetingTemplate template) {

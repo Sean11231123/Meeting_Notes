@@ -1,7 +1,7 @@
 name: meeting_notes
 description: "A local-first AI Meeting Assistant for students."
 publish_to: 'none'
-version: 1.4.0+3
+version: 1.4.1+4
 
 environment:
   sdk: ^3.11.3
