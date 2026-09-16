@@ -3,6 +3,7 @@ import 'recorder_page.dart'; // 確保能跳轉到錄音頁
 import 'transitions.dart';
 import 'key_storage.dart';
 import 'onboarding_page.dart';
+import 'gemini_model_service.dart';
 
 class ApiKeyPage extends StatefulWidget {
   final bool isUpdate;
@@ -16,6 +17,7 @@ class _ApiKeyPageState extends State<ApiKeyPage> {
   final _controller = TextEditingController();
   bool _obscureText = true;
   bool _isLoading = true;
+  bool _isValidating = false;
 
   @override
   void initState() {
@@ -53,6 +55,19 @@ class _ApiKeyPageState extends State<ApiKeyPage> {
       ).showSnackBar(const SnackBar(content: Text('請輸入 API Key')));
       return;
     }
+
+    setState(() => _isValidating = true);
+    // 用「取得模型清單」當作最輕量的驗證：能拿到清單就代表 key 有效。
+    final models = await GeminiModelService.fetchAvailableModels(key);
+    if (!mounted) return;
+    setState(() => _isValidating = false);
+
+    if (models.isEmpty) {
+      final proceedAnyway = await _confirmSaveUnverifiedKey();
+      if (proceedAnyway != true) return;
+    }
+
+    if (!mounted) return;
     await KeyStorage.write(key);
     if (mounted) {
       if (widget.isUpdate) {
@@ -67,6 +82,29 @@ class _ApiKeyPageState extends State<ApiKeyPage> {
         );
       }
     }
+  }
+
+  Future<bool?> _confirmSaveUnverifiedKey() {
+    return showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('無法驗證這組 API Key'),
+        content: const Text(
+          '可能是 Key 本身有誤，也可能只是目前網路連線不穩，暫時無法向 Google 確認。\n\n'
+          '你可以選擇仍然儲存這組 Key（之後分析時若仍無效會再提示），或返回重新確認。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('返回重新確認'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('仍然儲存'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -136,13 +174,22 @@ class _ApiKeyPageState extends State<ApiKeyPage> {
             SizedBox(
               width: double.infinity,
               child: ElevatedButton(
-                onPressed: _saveKey,
+                onPressed: _isValidating ? null : _saveKey,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.indigo,
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(vertical: 16),
                 ),
-                child: const Text('儲存並開始使用'),
+                child: _isValidating
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Text('儲存並開始使用'),
               ),
             ),
           ],

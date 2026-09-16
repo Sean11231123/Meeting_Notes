@@ -15,17 +15,39 @@ class HistoryPage extends StatefulWidget {
 
 class _HistoryPageState extends State<HistoryPage> {
   final _service = HistoryService();
+  final _searchController = TextEditingController();
   List<HistoryRecord> _records = [];
+  List<String> _allTags = [];
+  final Set<String> _selectedTags = {};
   bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
+    _searchController.addListener(_applyFilter);
     _load();
   }
 
+  @override
+  void dispose() {
+    _searchController.removeListener(_applyFilter);
+    _searchController.dispose();
+    super.dispose();
+  }
+
   Future<void> _load() async {
-    final records = await _service.loadAll();
+    final tags = await _service.allTags();
+    if (mounted) {
+      setState(() => _allTags = tags);
+    }
+    await _applyFilter();
+  }
+
+  Future<void> _applyFilter() async {
+    final records = await _service.search(
+      query: _searchController.text,
+      tags: _selectedTags.toList(),
+    );
     // 確保列表是依照時間排序（最新的在前）
     records.sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
@@ -42,6 +64,17 @@ class _HistoryPageState extends State<HistoryPage> {
     await _load();
   }
 
+  void _toggleTagFilter(String tag) {
+    setState(() {
+      if (_selectedTags.contains(tag)) {
+        _selectedTags.remove(tag);
+      } else {
+        _selectedTags.add(tag);
+      }
+    });
+    _applyFilter();
+  }
+
   // --- 已刪除原本錯誤的 updateName 方法，請統一使用 HistoryService ---
 
   String _formatDate(DateTime dt) {
@@ -50,6 +83,9 @@ class _HistoryPageState extends State<HistoryPage> {
         '${dt.hour.toString().padLeft(2, '0')}:'
         '${dt.minute.toString().padLeft(2, '0')}';
   }
+
+  bool get _hasActiveFilter =>
+      _searchController.text.trim().isNotEmpty || _selectedTags.isNotEmpty;
 
   @override
   Widget build(BuildContext context) {
@@ -68,60 +104,153 @@ class _HistoryPageState extends State<HistoryPage> {
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
-          : _records.isEmpty
-          ? const Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.history, size: 64, color: Colors.grey),
-                  SizedBox(height: 16),
-                  Text(
-                    '還沒有任何紀錄',
-                    style: TextStyle(color: Colors.grey, fontSize: 16),
+          : Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                  child: TextField(
+                    controller: _searchController,
+                    decoration: InputDecoration(
+                      hintText: '搜尋筆記名稱或內容',
+                      prefixIcon: const Icon(Icons.search),
+                      isDense: true,
+                      suffixIcon: _searchController.text.isEmpty
+                          ? null
+                          : IconButton(
+                              icon: const Icon(Icons.clear),
+                              onPressed: () => _searchController.clear(),
+                            ),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
                   ),
-                ],
-              ),
-            )
-          : ListView.separated(
-              padding: const EdgeInsets.all(16),
-              itemCount: _records.length,
-              separatorBuilder: (_, _) => const SizedBox(height: 12),
-              itemBuilder: (context, index) {
-                final record = _records[index];
-                return Card(
-                  elevation: 0,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    side: BorderSide(color: Colors.indigo.shade100),
+                ),
+                if (_allTags.isNotEmpty)
+                  SizedBox(
+                    height: 40,
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      itemCount: _allTags.length,
+                      separatorBuilder: (_, _) => const SizedBox(width: 8),
+                      itemBuilder: (context, index) {
+                        final tag = _allTags[index];
+                        final isSelected = _selectedTags.contains(tag);
+                        return FilterChip(
+                          label: Text(tag),
+                          selected: isSelected,
+                          onSelected: (_) => _toggleTagFilter(tag),
+                        );
+                      },
+                    ),
                   ),
-                  child: ListTile(
-                    leading: Text(
-                      record.displayIcons,
-                      style: const TextStyle(fontSize: 28),
-                    ),
-                    title: Text(
-                      record.templateName,
-                      style: const TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    subtitle: Text(
-                      record.templateNames.length > 1
-                          ? '${record.displayName} · ${_formatDate(record.createdAt)}'
-                          : _formatDate(record.createdAt),
-                    ),
-                    trailing: IconButton(
-                      icon: const Icon(Icons.delete_outline, color: Colors.red),
-                      onPressed: () => _confirmDelete(record.id),
-                    ),
-                    onTap: () async {
-                      await Navigator.push(
-                        context,
-                        FadeRoute(page: HistoryDetailPage(record: record)),
-                      );
-                      _load();
-                    },
-                  ),
-                );
-              },
+                const SizedBox(height: 8),
+                Expanded(
+                  child: _records.isEmpty
+                      ? Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                _hasActiveFilter
+                                    ? Icons.search_off
+                                    : Icons.history,
+                                size: 64,
+                                color: Colors.grey,
+                              ),
+                              const SizedBox(height: 16),
+                              Text(
+                                _hasActiveFilter ? '找不到符合條件的紀錄' : '還沒有任何紀錄',
+                                style: const TextStyle(
+                                  color: Colors.grey,
+                                  fontSize: 16,
+                                ),
+                              ),
+                            ],
+                          ),
+                        )
+                      : ListView.separated(
+                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                          itemCount: _records.length,
+                          separatorBuilder: (_, _) => const SizedBox(height: 12),
+                          itemBuilder: (context, index) {
+                            final record = _records[index];
+                            return Card(
+                              elevation: 0,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                side: BorderSide(color: Colors.indigo.shade100),
+                              ),
+                              child: ListTile(
+                                leading: Text(
+                                  record.displayIcons,
+                                  style: const TextStyle(fontSize: 28),
+                                ),
+                                title: Text(
+                                  record.templateName,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                subtitle: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      record.templateNames.length > 1
+                                          ? '${record.displayName} · ${_formatDate(record.createdAt)}'
+                                          : _formatDate(record.createdAt),
+                                    ),
+                                    if (record.tags.isNotEmpty)
+                                      Padding(
+                                        padding: const EdgeInsets.only(top: 4),
+                                        child: Wrap(
+                                          spacing: 6,
+                                          children: record.tags
+                                              .map(
+                                                (t) => Chip(
+                                                  label: Text(
+                                                    t,
+                                                    style: const TextStyle(
+                                                      fontSize: 11,
+                                                    ),
+                                                  ),
+                                                  visualDensity:
+                                                      VisualDensity.compact,
+                                                  materialTapTargetSize:
+                                                      MaterialTapTargetSize
+                                                          .shrinkWrap,
+                                                  padding: EdgeInsets.zero,
+                                                ),
+                                              )
+                                              .toList(),
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                                isThreeLine: record.tags.isNotEmpty,
+                                trailing: IconButton(
+                                  icon: const Icon(
+                                    Icons.delete_outline,
+                                    color: Colors.red,
+                                  ),
+                                  onPressed: () => _confirmDelete(record.id),
+                                ),
+                                onTap: () async {
+                                  await Navigator.push(
+                                    context,
+                                    FadeRoute(
+                                      page: HistoryDetailPage(record: record),
+                                    ),
+                                  );
+                                  _load();
+                                },
+                              ),
+                            );
+                          },
+                        ),
+                ),
+              ],
             ),
     );
   }
@@ -161,12 +290,14 @@ class HistoryDetailPage extends StatefulWidget {
 
 class _HistoryDetailPageState extends State<HistoryDetailPage> {
   late String _currentName;
+  late List<String> _currentTags;
   final _service = HistoryService();
 
   @override
   void initState() {
     super.initState();
     _currentName = widget.record.templateName;
+    _currentTags = List<String>.from(widget.record.tags);
   }
 
   // 格式化日期建議統一寫法
@@ -219,6 +350,48 @@ class _HistoryDetailPageState extends State<HistoryDetailPage> {
     }
   }
 
+  Future<void> _addTag() async {
+    final controller = TextEditingController();
+    final newTag = await showDialog<String>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('新增標籤'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            border: OutlineInputBorder(),
+            hintText: '例如：微積分、第三週',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('取消'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, controller.text.trim()),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.indigo,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('新增'),
+          ),
+        ],
+      ),
+    );
+
+    if (newTag != null && newTag.isNotEmpty && !_currentTags.contains(newTag)) {
+      setState(() => _currentTags.add(newTag));
+      await _service.updateTags(widget.record.id, _currentTags);
+    }
+  }
+
+  Future<void> _removeTag(String tag) async {
+    setState(() => _currentTags.remove(tag));
+    await _service.updateTags(widget.record.id, _currentTags);
+  }
+
   @override
   Widget build(BuildContext context) {
     // 這裡使用更新後的 _currentName
@@ -255,6 +428,7 @@ class _HistoryDetailPageState extends State<HistoryDetailPage> {
                 createdAt: widget.record.createdAt,
                 templateNames: widget.record.templateNames,
                 templateIcons: widget.record.templateIcons,
+                tags: _currentTags,
               );
               if (format == 'txt')
                 await DownloadService.downloadTxt(context, updatedRecord);
@@ -284,6 +458,24 @@ class _HistoryDetailPageState extends State<HistoryDetailPage> {
             Text(
               _formatDate(widget.record.createdAt),
               style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                ..._currentTags.map(
+                  (tag) => Chip(
+                    label: Text(tag),
+                    onDeleted: () => _removeTag(tag),
+                  ),
+                ),
+                ActionChip(
+                  avatar: const Icon(Icons.add, size: 16),
+                  label: const Text('新增標籤'),
+                  onPressed: _addTag,
+                ),
+              ],
             ),
             const SizedBox(height: 16),
             Container(

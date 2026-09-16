@@ -45,6 +45,8 @@
 
 你的 API 金鑰會安全地儲存在裝置本機，不會對外傳送。
 
+> ℹ️ **Web／PWA 版補充說明**：由於瀏覽器的 CORS 限制，Web 版在（1）上傳較大音檔（≥ 20 MB）與（2）取得可用模型清單時，會透過本人自行架設的 Cloudflare Worker（`gemini-proxy.sean9611231123.workers.dev`）轉發請求到 Google API；這個 Proxy 只單純轉發封包，不會記錄、儲存或用於任何其他用途。20 MB 以下的音檔分析（多數短錄音都屬於這種情況）仍是由瀏覽器直接呼叫 Google API，不經過此 Proxy。
+
 ---
 
 ## 🛠️ 開發環境設定

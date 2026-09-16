@@ -132,6 +132,7 @@ class GeminiFileService {
     String prompt,
     String model, {
     required String mimeType,
+    Duration? timeout,
   }) async {
     final response = await _withRetry(() async {
       final response = await http
@@ -153,7 +154,7 @@ class GeminiFileService {
               ],
             }),
           )
-          .timeout(_requestTimeout);
+          .timeout(timeout ?? _requestTimeout);
       if (response.statusCode != 200) {
         throw exceptionFromResponse(response, 'Gemini 分析失敗');
       }

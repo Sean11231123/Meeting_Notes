@@ -131,6 +131,15 @@ class _RecorderPageState extends State<RecorderPage> {
     );
   }
 
+  /// 在新的錄音／上傳即將取代目前的 pending 音檔之前呼叫，
+  /// 避免舊的 pending 音檔實體檔案變成沒人參照的孤兒檔案。
+  Future<void> _deleteOldPendingFileIfAny() async {
+    final oldPath = _pendingAudio?.path;
+    if (oldPath != null) {
+      await deleteAudioFile(oldPath);
+    }
+  }
+
   Future<void> _clearPendingAudio({bool deleteFile = false}) async {
     final path = _pendingAudio?.path;
     await PendingAudioService.clear();
@@ -318,6 +327,7 @@ class _RecorderPageState extends State<RecorderPage> {
         setState(() => _statusText = '無法讀取音檔，請重新選擇。');
         return;
       }
+      await _deleteOldPendingFileIfAny();
       await _savePendingWebBytes(bytes, file.name, mimeType);
       setState(() {
         _uploadedFileName = file.name;
@@ -337,6 +347,9 @@ class _RecorderPageState extends State<RecorderPage> {
       return;
     }
 
+    // 確定新檔案可用之後，才清掉舊的 pending 音檔，避免挑選失敗時
+    // 平白把使用者原本還沒分析的舊音檔刪掉。
+    await _deleteOldPendingFileIfAny();
     final pendingPath = await copyAudioToPending(file.path!, file.name);
     await _savePendingNativePath(pendingPath, file.name, mimeType);
     setState(() {
@@ -417,33 +430,55 @@ class _RecorderPageState extends State<RecorderPage> {
         }
       }
 
-      // ── 依選擇的模板逐一分析 ──
-      final results = <String>[];
-      for (int i = 0; i < templates.length; i++) {
-        final template = templates[i];
-        setState(
-          () => _statusText =
-              'AI 分析中 ${i + 1}/${templates.length}：${template.name}',
-        );
+      // ── 分析：單一模板照舊；多模板則合併成單一請求送出 ──
+      // (多模板若逐一呼叫，音訊內容等於被重複計費 N 次；改成一次請求、
+      //  請模型依序輸出每個模板的段落，再依標記切開，音訊只需被處理一次。)
+      final List<String> results;
+      if (templates.length == 1) {
+        final template = templates.first;
+        setState(() => _statusText = 'AI 分析中：${template.name}');
         final prompt = _enhancedPrompt(template);
-        if (audioBytes != null) {
-          final result = await _generateInline(
-            apiKey: apiKey,
-            modelName: modelName,
-            mimeType: mimeType,
-            audioBytes: audioBytes,
-            prompt: prompt,
-          );
-          results.add(result);
-        } else {
-          final result = await fileService.analyzeWithFileUri(
-            fileUri!,
-            prompt,
-            modelName,
-            mimeType: mimeType,
-          );
-          results.add(result);
-        }
+        final raw = audioBytes != null
+            ? await _generateInline(
+                apiKey: apiKey,
+                modelName: modelName,
+                mimeType: mimeType,
+                audioBytes: audioBytes,
+                prompt: prompt,
+              )
+            : await fileService.analyzeWithFileUri(
+                fileUri!,
+                prompt,
+                modelName,
+                mimeType: mimeType,
+              );
+        results = [raw];
+      } else {
+        setState(
+          () => _statusText = 'AI 分析中（單次請求同時處理 ${templates.length} 個模板）...',
+        );
+        final prompt = _combinedPrompt(templates);
+        // 一次要產生多個模板份量的內容，回應會比單模板長，適度拉長逾時時間。
+        final extendedTimeout = Duration(
+          seconds: 90 + 45 * (templates.length - 1),
+        );
+        final raw = audioBytes != null
+            ? await _generateInline(
+                apiKey: apiKey,
+                modelName: modelName,
+                mimeType: mimeType,
+                audioBytes: audioBytes,
+                prompt: prompt,
+                timeout: extendedTimeout,
+              )
+            : await fileService.analyzeWithFileUri(
+                fileUri!,
+                prompt,
+                modelName,
+                mimeType: mimeType,
+                timeout: extendedTimeout,
+              );
+        results = _splitCombinedResult(raw, templates.length);
       }
 
       final combinedResult = results.join('\n\n---\n\n');
@@ -491,6 +526,7 @@ class _RecorderPageState extends State<RecorderPage> {
     required String mimeType,
     required Uint8List audioBytes,
     required String prompt,
+    Duration timeout = const Duration(seconds: 90),
   }) async {
     return _withInlineRetry(() async {
       final model = GenerativeModel(model: modelName, apiKey: apiKey);
@@ -498,7 +534,7 @@ class _RecorderPageState extends State<RecorderPage> {
           .generateContent([
             Content.multi([DataPart(mimeType, audioBytes), TextPart(prompt)]),
           ])
-          .timeout(const Duration(seconds: 90));
+          .timeout(timeout);
       return response.text ?? '未取得分析結果';
     });
   }
@@ -529,6 +565,61 @@ ${template.prompt}
 ''';
   }
 
+  static final RegExp _taskMarkerPattern = RegExp(r'===TASK_(\d+)===');
+
+  /// 將多個模板的需求合併成單一個 prompt，讓 Gemini 一次分析同一段音訊、
+  /// 依序產生每個模板各自的段落，避免每個模板都重新送一次音訊而重複計費。
+  String _combinedPrompt(List<MeetingTemplate> templates) {
+    final buffer = StringBuffer()
+      ..writeln('你是一位多功能的錄音分析助理。')
+      ..writeln('這段錄音需要「同時」完成以下 ${templates.length} 項各自獨立的分析任務。')
+      ..writeln('請務必嚴格遵守以下規則：')
+      ..writeln(
+        '1. 每一項任務開始前，請先單獨一行輸出對應的任務標記，格式為 ===TASK_數字===（例如 ===TASK_1===），標記文字請完全照抄、不要更動或翻譯。',
+      )
+      ..writeln('2. 標記後才開始撰寫該任務的完整分析內容，各任務內容需彼此獨立，不要互相參照或重複。')
+      ..writeln('3. ${templates.length} 項任務都必須完成，不可省略、合併或跳過任何一項。')
+      ..writeln();
+
+    for (int i = 0; i < templates.length; i++) {
+      buffer
+        ..writeln('===TASK_${i + 1}===')
+        ..writeln('【任務 ${i + 1}：${templates[i].name}】')
+        ..writeln(templates[i].prompt)
+        ..writeln();
+    }
+
+    buffer
+      ..writeln('---')
+      ..writeln('每一項任務的內容都請用繁體中文整理成清楚的 Markdown 筆記：')
+      ..writeln('1. 使用 # 與 ## 建立層級標題。')
+      ..writeln('2. 使用 **粗體** 標示重點。')
+      ..writeln('3. 使用條列或編號整理資訊。')
+      ..writeln('4. 行動項目請使用 - [ ] 格式。')
+      ..writeln('5. 不同段落可使用 --- 分隔（但不要拿來取代 ===TASK_數字=== 標記）。');
+
+    return buffer.toString();
+  }
+
+  /// 依 ===TASK_數字=== 標記把單一回應切回每個模板各自的段落。
+  /// 如果模型沒有照格式輸出（標記數量不足），就整段當作單一結果，
+  /// 至少讓使用者拿到完整內容，不會因為格式解析失敗而整批報錯。
+  List<String> _splitCombinedResult(String raw, int expectedCount) {
+    final matches = _taskMarkerPattern.allMatches(raw).toList();
+    if (matches.length < expectedCount) {
+      return [raw.trim()];
+    }
+
+    final sections = <String>[];
+    for (int i = 0; i < matches.length; i++) {
+      final start = matches[i].end;
+      final end = i + 1 < matches.length ? matches[i + 1].start : raw.length;
+      final section = raw.substring(start, end).trim();
+      if (section.isNotEmpty) sections.add(section);
+    }
+    return sections.isEmpty ? [raw.trim()] : sections;
+  }
+
   Future<void> _toggleRecording() async {
     if (_isRecording) {
       if (kIsWeb) {
@@ -556,7 +647,8 @@ ${template.prompt}
         if (path != null) {
           final fileName =
               'recording_${DateTime.now().millisecondsSinceEpoch}.wav';
-          final pendingPath = await copyAudioToPending(path, fileName);
+          // 錄音檔是 App 自己在暫存目錄產生的，搬移即可，不需要保留原始檔。
+          final pendingPath = await moveAudioToPending(path, fileName);
           await _savePendingNativePath(pendingPath, fileName, 'audio/wav');
           setState(() {
             _uploadedFileName = fileName;
@@ -604,6 +696,11 @@ ${template.prompt}
         await _serviceChannel.invokeMethod('startService');
       }
     }
+
+    // 錄音已經確定成功開始了，這時候才清掉舊的 pending 音檔實體檔案。
+    // 放在權限請求「之前」的話，一旦使用者拒絕權限、沒有真的開始錄音，
+    // 反而會平白把使用者原本還沒分析的舊錄音刪掉。
+    await _deleteOldPendingFileIfAny();
 
     _recordSeconds = 0;
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
