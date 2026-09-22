@@ -1,5 +1,5 @@
 {
-  "version": "1.5.0",
-  "message": "remove history limit, improve storage, and add tags to notes",
+  "version": "1.5.1",
+  "message": "fix searching bug",
   "url": "https://github.com/Sean11231123/Meeting_Notes/releases/latest"
 }

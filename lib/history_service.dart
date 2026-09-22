@@ -216,7 +216,13 @@ class HistoryService {
     return list;
   }
 
-  /// 依關鍵字（比對名稱與內容）與標籤（需同時符合所有選取標籤）篩選歷史紀錄。
+  /// 依關鍵字（比對「筆記標題」「內容」「標籤」）與標籤篩選 chips
+  /// （需同時符合所有選取標籤）篩選歷史紀錄。
+  ///
+  /// 注意：使用者看到、會拿來搜尋的標題是 [HistoryRecord.templateName]（單數），
+  /// 不是 [HistoryRecord.displayName]／[HistoryRecord.templateNames]——後者是
+  /// 「這篇筆記用了哪些模板」的輔助資訊，只有多模板時才會顯示在卡片副標題，
+  /// 單一模板時使用者完全看不到、也不會拿來搜尋，所以不能當作名稱來比對。
   Future<List<HistoryRecord>> search({
     String query = '',
     List<String> tags = const [],
@@ -228,10 +234,13 @@ class HistoryService {
     return all.where((r) {
       final matchesKeyword =
           keyword.isEmpty ||
+          r.templateName.toLowerCase().contains(keyword) ||
           r.displayName.toLowerCase().contains(keyword) ||
-          r.result.toLowerCase().contains(keyword);
-      final matchesTags = tags.isEmpty || tags.every((t) => r.tags.contains(t));
-      return matchesKeyword && matchesTags;
+          r.result.toLowerCase().contains(keyword) ||
+          r.tags.any((t) => t.toLowerCase().contains(keyword));
+      final matchesTagFilter =
+          tags.isEmpty || tags.every((t) => r.tags.contains(t));
+      return matchesKeyword && matchesTagFilter;
     }).toList();
   }
 }
