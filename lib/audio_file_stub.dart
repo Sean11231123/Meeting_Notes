@@ -1,5 +1,9 @@
 import 'dart:typed_data';
 
+Future<String> activeRecordingFilePath(String fileName) {
+  throw UnsupportedError('File paths are not available on this platform.');
+}
+
 Future<int> audioFileLength(String path) {
   throw UnsupportedError('File paths are not available on this platform.');
 }

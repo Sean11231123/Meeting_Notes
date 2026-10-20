@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:google_generative_ai/google_generative_ai.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:record/record.dart';
 import 'package:share_plus/share_plus.dart';
@@ -48,6 +47,11 @@ class _RecorderPageState extends State<RecorderPage> {
   Timer? _timer;
 
   bool _isRecording = false;
+  bool _isStopping = false;
+  // true 代表「不知道原生/瀏覽器端的錄音器現在是不是真的已經停止」
+  // （stop() 逾時或丟出非預期例外）。在搞清楚之前鎖住所有錄音操作，
+  // 避免在舊的錄音工作階段狀態不明的情況下又疊加一個新的。
+  bool _stopResultUnknown = false;
   bool _isAnalyzing = false;
   int _recordSeconds = 0;
 
@@ -621,35 +625,87 @@ ${template.prompt}
   }
 
   Future<void> _toggleRecording() async {
+    // 狀態不明時完全鎖住（按鈕本身也會停用，這裡是防呆用的第二層）。
+    if (_stopResultUnknown) return;
+
     if (_isRecording) {
+      // 防止在原生 stop() 還沒回應時被連續點擊：連點會讓 stop() 被重複呼叫，
+      // 可能讓錄音器進入不明狀態，讓「按了沒反應」變得更難恢復。
+      if (_isStopping) return;
+      setState(() => _isStopping = true);
+
       if (kIsWeb) {
-        final bytes = Uint8List.fromList(await _webRecorder.stop());
-        await _savePendingWebBytes(bytes, 'recording.webm', 'audio/webm');
-        _timer?.cancel();
-        _timer = null;
-
-        setState(() {
-          _isRecording = false;
-          _uploadedFileName = 'recording.webm';
-          _currentMimeType = 'audio/webm';
-          _webAudioBytes = bytes;
-          _lastFilePath = 'web_recording';
-          _statusText = '錄音完成，可開始 AI 分析';
-        });
+        await _stopWebRecording();
       } else {
-        final path = await _recorder.stop();
-        if (isAndroidPlatform) {
-          await _serviceChannel.invokeMethod('stopService');
-        }
-        _timer?.cancel();
-        _timer = null;
+        await _stopNativeRecording();
+      }
+      return;
+    }
 
-        if (path != null) {
-          final fileName =
-              'recording_${DateTime.now().millisecondsSinceEpoch}.wav';
-          // 錄音檔是 App 自己在暫存目錄產生的，搬移即可，不需要保留原始檔。
-          final pendingPath = await moveAudioToPending(path, fileName);
-          await _savePendingNativePath(pendingPath, fileName, 'audio/wav');
+    await _startRecording();
+  }
+
+  /// 停止原生（Android）錄音。
+  ///
+  /// `Future.timeout()` 只是讓 Dart 端不再等待，並不會真的取消底層仍在執行
+  /// 的原生呼叫——逾時或丟出非預期例外時，我們沒辦法分辨錄音器到底是
+  /// 「其實已經停了、只是回應遺失」還是「真的還在錄」。在搞清楚之前絕對不能
+  /// 讓使用者開始新錄音（可能疊加在還沒真正結束的舊錄音上），所以進入
+  /// [_stopResultUnknown] 鎖定狀態，而不是直接恢復成平常的待機畫面。
+  Future<void> _stopNativeRecording() async {
+    String? rawPath;
+    Object? stopError;
+    var nativeStopConfirmed = false;
+
+    try {
+      rawPath = await _recorder.stop().timeout(const Duration(seconds: 15));
+      nativeStopConfirmed = true;
+    } catch (e) {
+      stopError = e;
+    }
+
+    // 停前景服務、取消計時器是「我方自己」的狀態清理，跟 record 套件內部
+    // 是否真的停止錄音無關；不應該因為上面 stop() 失敗就被跳過，
+    // 否則前景通知可能永遠留著、計時畫面也會卡住。用巢狀 try/finally
+    // 確保這兩步一定會執行，彼此也不會因為對方失敗而被跳過。
+    try {
+      if (isAndroidPlatform) {
+        try {
+          await _serviceChannel.invokeMethod('stopService');
+        } catch (e) {
+          debugPrint('[Recorder] stopService 失敗（不影響錄音狀態判定）: $e');
+        }
+      }
+    } finally {
+      _timer?.cancel();
+      _timer = null;
+    }
+
+    if (!nativeStopConfirmed) {
+      debugPrint('[Recorder] 原生 stop() 無法確認結果: $stopError');
+      if (mounted) {
+        setState(() {
+          _isStopping = false;
+          _isRecording = false;
+          _stopResultUnknown = true;
+          _statusText = stopError is TimeoutException
+              ? '停止錄音逾時，無法確認錄音是否已經真的停止。為避免疊加錄音，請重新開啟 App 後再操作。'
+              : '停止錄音時發生非預期錯誤，無法確認錄音狀態（$stopError）。請重新開啟 App 後再操作。';
+        });
+      }
+      return;
+    }
+
+    if (mounted) setState(() => _statusText = '處理錄音檔中…');
+
+    if (rawPath != null) {
+      try {
+        final fileName =
+            'recording_${DateTime.now().millisecondsSinceEpoch}.wav';
+        // 錄音檔是 App 自己在暫存目錄產生的，搬移即可，不需要保留原始檔。
+        final pendingPath = await moveAudioToPending(rawPath, fileName);
+        await _savePendingNativePath(pendingPath, fileName, 'audio/wav');
+        if (mounted) {
           setState(() {
             _uploadedFileName = fileName;
             _currentMimeType = 'audio/wav';
@@ -658,19 +714,102 @@ ${template.prompt}
             _statusText = '錄音完成，可開始 AI 分析';
           });
         }
+      } catch (e) {
+        // 錄音本身確定已經停止、檔案也確定還在 rawPath，只是搬移／保存
+        // pending 這一步失敗了。不能靜默吞掉、讓使用者以為錄音不見了，
+        // 所以把原始路徑留在畫面訊息裡，而不是只把按鈕恢復正常。
+        debugPrint('[Recorder] 保存 pending 音檔失敗: $e');
+        if (mounted) {
+          setState(() {
+            _statusText = '錄音已停止，但儲存時發生錯誤：$e\n原始檔案仍保留在：$rawPath';
+          });
+        }
+      }
+    }
 
-        setState(() => _isRecording = false);
+    if (mounted) {
+      setState(() {
+        _isRecording = false;
+        _isStopping = false;
+      });
+    }
+  }
+
+  /// 停止 Web 錄音，邏輯對應 [_stopNativeRecording]（見其註解說明逾時的限制）。
+  Future<void> _stopWebRecording() async {
+    List<int>? rawBytes;
+    Object? stopError;
+    var stopConfirmed = false;
+
+    try {
+      rawBytes = await _webRecorder.stop().timeout(const Duration(seconds: 15));
+      stopConfirmed = true;
+    } catch (e) {
+      stopError = e;
+    }
+
+    _timer?.cancel();
+    _timer = null;
+
+    if (!stopConfirmed) {
+      debugPrint('[Recorder] Web stop() 無法確認結果: $stopError');
+      if (mounted) {
+        setState(() {
+          _isStopping = false;
+          _isRecording = false;
+          _stopResultUnknown = true;
+          _statusText = stopError is TimeoutException
+              ? '停止錄音逾時，無法確認錄音是否已經真的停止。請重新整理頁面後再操作。'
+              : '停止錄音時發生非預期錯誤，無法確認錄音狀態（$stopError）。請重新整理頁面後再操作。';
+        });
       }
       return;
     }
 
+    if (mounted) setState(() => _statusText = '處理錄音檔中…');
+
+    try {
+      final bytes = Uint8List.fromList(rawBytes!);
+      await _savePendingWebBytes(bytes, 'recording.webm', 'audio/webm');
+      if (mounted) {
+        setState(() {
+          _uploadedFileName = 'recording.webm';
+          _currentMimeType = 'audio/webm';
+          _webAudioBytes = bytes;
+          _lastFilePath = 'web_recording';
+          _statusText = '錄音完成，可開始 AI 分析';
+        });
+      }
+    } catch (e) {
+      // Web 版沒有檔案路徑可以留給使用者手動復原（資料是記憶體中的 bytes），
+      // 只能誠實告知保存失敗，請使用者重新錄一次。
+      debugPrint('[Recorder] 保存 Web 錄音失敗: $e');
+      if (mounted) {
+        setState(() => _statusText = '錄音已停止，但儲存時發生錯誤：$e\n請重新錄音一次。');
+      }
+    }
+
+    if (mounted) {
+      setState(() {
+        _isRecording = false;
+        _isStopping = false;
+      });
+    }
+  }
+
+  Future<void> _startRecording() async {
     if (kIsWeb) {
       final hasPermission = await _webRecorder.hasPermission();
       if (!hasPermission) {
         setState(() => _statusText = '需要麥克風權限才能錄音。');
         return;
       }
-      await _webRecorder.start();
+      try {
+        await _webRecorder.start();
+      } catch (e) {
+        if (mounted) setState(() => _statusText = '錄音啟動失敗：$e');
+        return;
+      }
     } else {
       final micStatus = await Permission.microphone.request();
       if (!micStatus.isGranted) {
@@ -681,19 +820,57 @@ ${template.prompt}
         await Permission.notification.request();
       }
 
-      final dir = await getTemporaryDirectory();
-      final filePath =
-          '${dir.path}/recording_${DateTime.now().millisecondsSinceEpoch}.wav';
-      await _recorder.start(
-        const RecordConfig(
-          encoder: AudioEncoder.wav,
-          sampleRate: 16000,
-          numChannels: 1,
-        ),
-        path: filePath,
+      // 注意：這裡「不能」用 getTemporaryDirectory()（對應 Android 的 cache
+      // 目錄）。cache 目錄的檔案系統隨時可能自行清掉，不會通知 App——
+      // 錄音檔案開著持續寫入時不會立刻出錯，但只要錄得夠久（實測約 90
+      // 分鐘以上就會發生），系統可能在錄音過程中把目錄項清掉，
+      // 等 stop() 關閉檔案後，資料就真的不見了，recorder 的收尾或後續
+      // 搬移動作就會對著一個已經不存在的路徑操作，行為不可預期（曾經是
+      // 停止按鈕卡死的成因之一）。改用應用程式自己的持久化儲存空間，
+      // 系統不會中途清除，不管錄多久都不受影響。
+      final filePath = await activeRecordingFilePath(
+        'recording_${DateTime.now().millisecondsSinceEpoch}.wav',
       );
+      try {
+        await _recorder.start(
+          const RecordConfig(
+            encoder: AudioEncoder.wav,
+            sampleRate: 16000,
+            numChannels: 1,
+          ),
+          path: filePath,
+        );
+      } catch (e) {
+        if (mounted) setState(() => _statusText = '錄音啟動失敗：$e');
+        return;
+      }
+
       if (isAndroidPlatform) {
-        await _serviceChannel.invokeMethod('startService');
+        try {
+          await _serviceChannel.invokeMethod('startService');
+        } catch (e) {
+          // 錄音器已經開始錄了，但前景服務沒有啟動成功——App 進背景很可能
+          // 被系統中斷在錄到一半的狀態。與其留著這種不一致的狀態，
+          // 補償性地立刻停止這次錄音，讓使用者看到明確訊息、從乾淨狀態重來。
+          debugPrint('[Recorder] 前景服務啟動失敗，補償性停止錄音: $e');
+          try {
+            await _recorder.stop();
+          } catch (stopErr) {
+            // 補償停止也失敗了——比單純的啟動失敗更不確定，一樣要鎖住。
+            debugPrint('[Recorder] 補償性停止也失敗: $stopErr');
+            if (mounted) {
+              setState(() {
+                _stopResultUnknown = true;
+                _statusText = '錄音服務啟動失敗，且補償性停止也失敗，無法確認錄音狀態。請重新開啟 App。';
+              });
+            }
+            return;
+          }
+          if (mounted) {
+            setState(() => _statusText = '錄音服務啟動失敗，已取消本次錄音，請再試一次。');
+          }
+          return;
+        }
       }
     }
 
@@ -707,14 +884,16 @@ ${template.prompt}
       if (mounted) setState(() => _recordSeconds++);
     });
 
-    setState(() {
-      _isRecording = true;
-      _analysisResult = null;
-      _webAudioBytes = null;
-      _lastFilePath = null;
-      _pendingAudio = null;
-      _statusText = '錄音中...';
-    });
+    if (mounted) {
+      setState(() {
+        _isRecording = true;
+        _analysisResult = null;
+        _webAudioBytes = null;
+        _lastFilePath = null;
+        _pendingAudio = null;
+        _statusText = '錄音中...';
+      });
+    }
   }
 
   @override
@@ -801,18 +980,45 @@ ${template.prompt}
               children: [
                 Expanded(
                   child: AnimatedButton(
-                    onPressed: _isAnalyzing ? null : _toggleRecording,
+                    onPressed:
+                        (_isAnalyzing || _isStopping || _stopResultUnknown)
+                        ? null
+                        : _toggleRecording,
                     scaleFactor: 0.97,
                     child: ElevatedButton.icon(
-                      onPressed: _isAnalyzing ? null : _toggleRecording,
-                      icon: Icon(
-                        _isRecording ? Icons.stop : Icons.fiber_manual_record,
+                      onPressed:
+                          (_isAnalyzing || _isStopping || _stopResultUnknown)
+                          ? null
+                          : _toggleRecording,
+                      icon: _isStopping
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : Icon(
+                              _stopResultUnknown
+                                  ? Icons.warning_amber_rounded
+                                  : (_isRecording
+                                        ? Icons.stop
+                                        : Icons.fiber_manual_record),
+                            ),
+                      label: Text(
+                        _stopResultUnknown
+                            ? '狀態不明，請重啟 App'
+                            : (_isStopping
+                                  ? '停止中…'
+                                  : (_isRecording ? '停止' : '錄音')),
                       ),
-                      label: Text(_isRecording ? '停止' : '錄音'),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: _isRecording
-                            ? Colors.red
-                            : Theme.of(context).colorScheme.primary,
+                        backgroundColor: _stopResultUnknown
+                            ? Colors.grey
+                            : (_isRecording
+                                  ? Colors.red
+                                  : Theme.of(context).colorScheme.primary),
                         foregroundColor: Theme.of(
                           context,
                         ).colorScheme.onPrimary,
@@ -825,12 +1031,14 @@ ${template.prompt}
                 const SizedBox(width: 12),
                 Expanded(
                   child: AnimatedButton(
-                    onPressed: _isAnalyzing || _isRecording
+                    onPressed:
+                        (_isAnalyzing || _isRecording || _stopResultUnknown)
                         ? null
                         : _pickAudioFile,
                     scaleFactor: 0.97,
                     child: ElevatedButton.icon(
-                      onPressed: _isAnalyzing || _isRecording
+                      onPressed:
+                          (_isAnalyzing || _isRecording || _stopResultUnknown)
                           ? null
                           : _pickAudioFile,
                       icon: const Icon(Icons.upload_file),

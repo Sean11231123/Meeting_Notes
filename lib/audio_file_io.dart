@@ -3,6 +3,22 @@ import 'dart:typed_data';
 
 import 'package:path_provider/path_provider.dart';
 
+/// 正在錄音中、尚未停止的檔案要寫去哪裡。
+///
+/// 刻意不用系統暫存／cache 目錄：Android 的 cache 目錄內容隨時可能被系統
+/// 自行清除且不會通知 App，對「開著持續寫入好幾十分鐘」的錄音檔案來說
+/// 不安全——錄得夠久，系統可能在錄音過程中就把它清掉，等錄音結束關閉
+/// 檔案時資料已經不見了。改用應用程式自己的持久化儲存空間（跟
+/// pending_audio 同一個家族），系統不會中途清除。
+Future<String> activeRecordingFilePath(String fileName) async {
+  final dir = await getApplicationSupportDirectory();
+  final activeDir = Directory('${dir.path}/active_recording');
+  if (!await activeDir.exists()) {
+    await activeDir.create(recursive: true);
+  }
+  return '${activeDir.path}/$fileName';
+}
+
 Future<int> audioFileLength(String path) => File(path).length();
 
 Future<Uint8List> readAudioFileBytes(String path) => File(path).readAsBytes();
