@@ -15,7 +15,6 @@ dependencies:
   record: ^7.1.2
   path_provider: ^2.1.0
   permission_handler: ^12.0.1
-  google_generative_ai: ^0.4.6
   shared_preferences: ^2.5.5
   flutter_secure_storage: ^9.2.4
   hive_ce: ^2.20.2

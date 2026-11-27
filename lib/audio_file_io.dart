@@ -23,6 +23,17 @@ Future<int> audioFileLength(String path) => File(path).length();
 
 Future<Uint8List> readAudioFileBytes(String path) => File(path).readAsBytes();
 
+/// 只讀檔案開頭 [count] 個位元組（例如讀 WAV 檔頭推算音檔長度），
+/// 不必把整個大檔案讀進記憶體。
+Future<Uint8List> readAudioFileHead(String path, int count) async {
+  final handle = await File(path).open();
+  try {
+    return await handle.read(count);
+  } finally {
+    await handle.close();
+  }
+}
+
 Future<String> copyAudioToPending(String sourcePath, String fileName) async {
   final targetPath = await _pendingTargetPath(fileName);
   await File(sourcePath).copy(targetPath);

@@ -5,14 +5,16 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
-import 'package:google_generative_ai/google_generative_ai.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:record/record.dart';
 import 'package:share_plus/share_plus.dart';
 
+import 'analysis_timeouts.dart';
 import 'animated_button.dart';
 import 'audio_file_stub.dart' if (dart.library.io) 'audio_file_io.dart';
 import 'audio_mime.dart';
+import 'duration_history.dart';
 import 'error_utils.dart';
 import 'gemini_file_service.dart';
 import 'history_page.dart';
@@ -20,6 +22,7 @@ import 'history_service.dart';
 import 'key_storage.dart';
 import 'model_settings.dart';
 import 'pending_audio_service.dart';
+import 'transfer_estimator.dart';
 import 'platform_support_stub.dart'
     if (dart.library.io) 'platform_support_io.dart';
 import 'recording_visualizer.dart';
@@ -28,6 +31,19 @@ import 'templates.dart';
 import 'transitions.dart';
 import 'update_service.dart';
 import 'web_recorder.dart' if (dart.library.io) 'web_recorder_stub.dart';
+
+/// 分析過程中顯示的進度（階段名稱、進度條比例、說明文字）。
+/// [fraction] 為 null 代表無法得知進度，顯示不確定進度條。
+class _ProgressView {
+  final String stage;
+  final double? fraction;
+  final String detail;
+  const _ProgressView({
+    required this.stage,
+    required this.fraction,
+    required this.detail,
+  });
+}
 
 class RecorderPage extends StatefulWidget {
   const RecorderPage({super.key});
@@ -40,7 +56,6 @@ class _RecorderPageState extends State<RecorderPage> {
   static const _serviceChannel = MethodChannel(
     'com.example.meeting_notes/recording_service',
   );
-  static const _inlineLimitBytes = 20 * 1024 * 1024;
 
   final AudioRecorder _recorder = AudioRecorder();
   final WebRecorder _webRecorder = WebRecorder();
@@ -62,6 +77,14 @@ class _RecorderPageState extends State<RecorderPage> {
   String? _currentMimeType;
   PendingAudio? _pendingAudio;
   String? _analysisResult;
+  // 分析失敗時產生的「技術細節」（已遮蔽敏感資訊），可展開、可複製。
+  String? _technicalDetails;
+
+  // 分析過程中，上傳進度／預估時間的即時顯示（每秒更新一次）。
+  final ValueNotifier<_ProgressView?> _progressView = ValueNotifier(null);
+  Timer? _progressTicker;
+  void Function()? _progressTick;
+  DurationHistory? _history;
   MeetingTemplate _selectedTemplate = kTemplates[0];
 
   @override
@@ -157,6 +180,7 @@ class _RecorderPageState extends State<RecorderPage> {
       _webAudioBytes = null;
       _uploadedFileName = null;
       _currentMimeType = null;
+      _technicalDetails = null;
       _statusText = '準備錄音或上傳音檔';
     });
   }
@@ -339,6 +363,7 @@ class _RecorderPageState extends State<RecorderPage> {
         _webAudioBytes = bytes;
         _lastFilePath = 'web_upload';
         _analysisResult = null;
+        _technicalDetails = null;
         _statusText = _statusText.startsWith('音檔已暫時保留')
             ? _statusText
             : '已選擇 ${file.name}\n可開始 AI 分析';
@@ -362,6 +387,7 @@ class _RecorderPageState extends State<RecorderPage> {
       _lastFilePath = pendingPath;
       _webAudioBytes = null;
       _analysisResult = null;
+      _technicalDetails = null;
       _statusText = '已選擇 ${file.name}\n可開始 AI 分析';
     });
   }
@@ -372,9 +398,15 @@ class _RecorderPageState extends State<RecorderPage> {
   ) async {
     if (!_hasAudio) return;
 
+    // 記錄各階段的進度與參數；失敗時用來產生「技術細節」並決定錯誤訊息。
+    final diag = AnalysisDiagnostics();
+    String? modelName;
+    _startProgress();
+
     setState(() {
       _isAnalyzing = true;
       _analysisResult = null;
+      _technicalDetails = null;
       _statusText = 'AI 分析中，請稍候...';
     });
 
@@ -388,7 +420,9 @@ class _RecorderPageState extends State<RecorderPage> {
         return;
       }
 
-      final modelName = await ModelSettings.read();
+      final modelId = await ModelSettings.read();
+      modelName = modelId;
+      _history = await DurationHistoryStore.load();
       final mimeType = _currentMimeType ?? _pendingAudio?.mimeType;
       if (mimeType == null) {
         throw GeminiServiceException('不支援此音檔格式');
@@ -396,43 +430,78 @@ class _RecorderPageState extends State<RecorderPage> {
 
       Uint8List? audioBytes;
       String? fileUri;
+      String? nativePath;
       final fileService = GeminiFileService(apiKey);
 
+      // 先取得檔案大小與音檔長度：各階段逾時依這兩個值計算，失敗時也拿來診斷。
+      final int audioSize;
+      Uint8List? wavHead;
       if (kIsWeb) {
         audioBytes = _webAudioBytes;
         if (audioBytes == null) {
           throw GeminiServiceException('Web 音檔已不存在，請重新選擇。');
         }
-        if (audioBytes.length > _inlineLimitBytes) {
-          setState(() => _statusText = '音檔較大，正在上傳...');
-          fileUri = await fileService.uploadAudioBytes(
-            audioBytes,
-            mimeType: mimeType,
-            fileName: _uploadedFileName ?? 'recording.webm',
-          );
-          audioBytes = null;
-          setState(() => _statusText = '音檔處理中...');
-          await fileService.waitUntilActive(fileUri);
+        audioSize = audioBytes.length;
+        if (audioSize >= 44) {
+          wavHead = Uint8List.sublistView(audioBytes, 0, 44);
         }
       } else {
-        final path = _lastFilePath;
-        if (path == null) {
+        nativePath = _lastFilePath;
+        if (nativePath == null) {
           throw GeminiServiceException('音檔已不存在，請重新選擇。');
         }
-        final fileSize = await audioFileLength(path);
-        if (fileSize <= _inlineLimitBytes) {
-          audioBytes = await readAudioFileBytes(path);
-        } else {
-          setState(() => _statusText = '音檔較大，正在上傳...');
-          fileUri = await fileService.uploadAudioPath(
-            path,
-            mimeType: mimeType,
-            fileName: _uploadedFileName ?? 'recording.wav',
-          );
-          setState(() => _statusText = '音檔處理中...');
-          await fileService.waitUntilActive(fileUri);
-        }
+        audioSize = await audioFileLength(nativePath);
+        wavHead = await _tryReadAudioHead(nativePath);
       }
+
+      final audioDuration = AnalysisTimeouts.estimateAudioDuration(
+        fileBytes: audioSize,
+        mimeType: mimeType,
+        header: wavHead,
+      );
+      diag.fileBytes = audioSize;
+      diag.audioDuration = audioDuration;
+
+      final useFileApi = AnalysisTimeouts.shouldUseFileApi(audioSize);
+      if (useFileApi) {
+        fileUri = await _prepareRemoteFile(
+          fileService: fileService,
+          diag: diag,
+          mimeType: mimeType,
+          audioSize: audioSize,
+          webBytes: kIsWeb ? audioBytes : null,
+          path: nativePath,
+        );
+        audioBytes = null;
+      } else if (!kIsWeb) {
+        audioBytes = await readAudioFileBytes(nativePath!);
+      }
+
+      // 分析逾時依音檔長度計算；多模板時已包含每多一個模板加 45 秒。
+      final analyzeTimeout = AnalysisTimeouts.analyze(
+        audio: audioDuration,
+        viaFileApi: useFileApi,
+        templateCount: templates.length,
+      );
+
+      // 分析沒有可靠的進度，只顯示已等待時間與（依歷史實測的）預估範圍。
+      final audioMinutes = audioDuration.inSeconds / 60;
+      final analysisEstimate = _history?.estimateAnalysis(
+        model: modelId,
+        templateCount: templates.length,
+        audioMinutes: audioMinutes,
+      );
+      final analysisWatch = Stopwatch()..start();
+      _setProgressStage(
+        () => _publishProgress(
+          _waitingView(
+            'AI 分析中',
+            analysisWatch.elapsed,
+            analysisEstimate,
+            overrunNote: '模型仍在分析',
+          ),
+        ),
+      );
 
       // ── 分析：單一模板照舊；多模板則合併成單一請求送出 ──
       // (多模板若逐一呼叫，音訊內容等於被重複計費 N 次；改成一次請求、
@@ -443,18 +512,21 @@ class _RecorderPageState extends State<RecorderPage> {
         setState(() => _statusText = 'AI 分析中：${template.name}');
         final prompt = _enhancedPrompt(template);
         final raw = audioBytes != null
-            ? await _generateInline(
-                apiKey: apiKey,
-                modelName: modelName,
+            ? await fileService.analyzeInline(
+                audioBytes,
+                prompt,
+                modelId,
                 mimeType: mimeType,
-                audioBytes: audioBytes,
-                prompt: prompt,
+                timeout: analyzeTimeout,
+                diag: diag,
               )
             : await fileService.analyzeWithFileUri(
                 fileUri!,
                 prompt,
-                modelName,
+                modelId,
                 mimeType: mimeType,
+                timeout: analyzeTimeout,
+                diag: diag,
               );
         results = [raw];
       } else {
@@ -462,27 +534,36 @@ class _RecorderPageState extends State<RecorderPage> {
           () => _statusText = 'AI 分析中（單次請求同時處理 ${templates.length} 個模板）...',
         );
         final prompt = _combinedPrompt(templates);
-        // 一次要產生多個模板份量的內容，回應會比單模板長，適度拉長逾時時間。
-        final extendedTimeout = Duration(
-          seconds: 90 + 45 * (templates.length - 1),
-        );
         final raw = audioBytes != null
-            ? await _generateInline(
-                apiKey: apiKey,
-                modelName: modelName,
+            ? await fileService.analyzeInline(
+                audioBytes,
+                prompt,
+                modelId,
                 mimeType: mimeType,
-                audioBytes: audioBytes,
-                prompt: prompt,
-                timeout: extendedTimeout,
+                timeout: analyzeTimeout,
+                diag: diag,
               )
             : await fileService.analyzeWithFileUri(
                 fileUri!,
                 prompt,
-                modelName,
+                modelId,
                 mimeType: mimeType,
-                timeout: extendedTimeout,
+                timeout: analyzeTimeout,
+                diag: diag,
               );
         results = _splitCombinedResult(raw, templates.length);
+      }
+
+      // 記下這次的實測耗時，供下次預估用。有重試過的不記，
+      // 以免把失敗與等待重試的時間算進去。
+      if (diag.attempts <= 1) {
+        _history?.recordAnalysis(
+          model: modelId,
+          templateCount: templates.length,
+          audioMinutes: audioMinutes,
+          seconds: analysisWatch.elapsed.inMilliseconds / 1000,
+        );
+        await _saveHistory();
       }
 
       final combinedResult = results.join('\n\n---\n\n');
@@ -515,44 +596,327 @@ class _RecorderPageState extends State<RecorderPage> {
         _statusText = 'AI 分析完成';
       });
     } catch (error) {
+      diag.endStage();
       debugPrint('Analysis failed: ${sanitizeForDebug(error)}');
+
+      String? appVersion;
+      try {
+        final info = await PackageInfo.fromPlatform();
+        appVersion = '${info.version}+${info.buildNumber}';
+      } catch (_) {
+        // 取不到版本不影響錯誤顯示。
+      }
+
       if (!mounted) return;
       setState(() {
         _isAnalyzing = false;
-        _statusText = sanitizeErrorForUser(error);
+        _statusText = sanitizeErrorForUser(error, diag: diag);
+        _technicalDetails = buildTechnicalDetails(
+          error,
+          diag: diag,
+          modelName: modelName,
+          appVersion: appVersion,
+        );
       });
+    } finally {
+      _stopProgress();
     }
   }
 
-  Future<String> _generateInline({
-    required String apiKey,
-    required String modelName,
-    required String mimeType,
-    required Uint8List audioBytes,
-    required String prompt,
-    Duration timeout = const Duration(seconds: 90),
-  }) async {
-    return _withInlineRetry(() async {
-      final model = GenerativeModel(model: modelName, apiKey: apiKey);
-      final response = await model
-          .generateContent([
-            Content.multi([DataPart(mimeType, audioBytes), TextPart(prompt)]),
-          ])
-          .timeout(timeout);
-      return response.text ?? '未取得分析結果';
-    });
+  Future<Uint8List?> _tryReadAudioHead(String path) async {
+    try {
+      return await readAudioFileHead(path, 44);
+    } catch (_) {
+      return null;
+    }
   }
 
-  Future<String> _withInlineRetry(Future<String> Function() action) async {
-    for (int attempt = 0; attempt < 3; attempt++) {
+  /// 確保大型音檔已經在 Google 端可用，回傳 fileUri。
+  ///
+  /// 這份音檔先前若已上傳成功（fileUri 記在待分析資料裡），先查詢檔案是否
+  /// 還在：還在就直接沿用，完全不重傳；已過期或失效才重新上傳。
+  /// 上傳是整個流程最慢、最容易失敗的一步，成功一次就不該重做。
+  Future<String> _prepareRemoteFile({
+    required GeminiFileService fileService,
+    required AnalysisDiagnostics diag,
+    required String mimeType,
+    required int audioSize,
+    Uint8List? webBytes,
+    String? path,
+  }) async {
+    final processingLimit = AnalysisTimeouts.processing(audioSize);
+    final cachedUri = _pendingAudio?.reusableFileUri;
+
+    if (cachedUri != null) {
+      diag.beginStage(
+        AnalysisStage.checkingFile,
+        timeout: const Duration(seconds: 60),
+      );
+      if (mounted) setState(() => _statusText = '檢查先前上傳的音檔...');
+
+      RemoteFileState? state;
       try {
-        return await action();
-      } catch (error) {
-        if (!isTemporaryFailure(error) || attempt == 2) rethrow;
-        await Future.delayed(Duration(milliseconds: 500 * (1 << attempt)));
+        state = await fileService.getFileState(cachedUri);
+      } catch (e) {
+        // 查詢本身失敗（網路等）：保守起見當作不可用，往下走重新上傳。
+        debugPrint('Check remote file failed: ${sanitizeForDebug(e)}');
+      }
+
+      if (state == RemoteFileState.active) {
+        diag.uploadCompleted = true;
+        return cachedUri;
+      }
+      if (state == RemoteFileState.processing) {
+        if (mounted) setState(() => _statusText = '音檔處理中...');
+        // 這個檔案是先前就上傳的，處理已經進行了一段時間，
+        // 這次等待的時間不能代表處理一個檔案要多久，所以不記錄。
+        await _waitForRemoteFile(
+          fileService,
+          cachedUri,
+          processingLimit,
+          diag,
+          audioSize: audioSize,
+          recordHistory: false,
+        );
+        diag.uploadCompleted = true;
+        return cachedUri;
+      }
+      if (state == RemoteFileState.failed || state == RemoteFileState.gone) {
+        await _forgetRemoteFile();
       }
     }
-    throw GeminiServiceException('暫時無法連線', retryable: true);
+
+    final sizeMb = (audioSize / (1024 * 1024)).toStringAsFixed(0);
+    if (mounted) {
+      setState(() => _statusText = '音檔較大（約 $sizeMb MB），正在上傳...\n可能需要數分鐘');
+    }
+    final fileName =
+        _uploadedFileName ?? (kIsWeb ? 'recording.webm' : 'recording.wav');
+
+    // 上傳：串流送出並回報進度，畫面每秒依實際速度更新剩餘時間。
+    // 網頁版拿不到上傳進度，只顯示已等待時間。
+    final uploadWatch = Stopwatch()..start();
+    final estimator = TransferEstimator(totalBytes: audioSize);
+    final uploadEstimate = _history?.estimateUpload(audioSize);
+    _setProgressStage(() {
+      if (kIsWeb) {
+        final view = _waitingView(
+          '上傳音檔',
+          uploadWatch.elapsed,
+          uploadEstimate,
+          overrunNote: '仍在上傳',
+        );
+        _publishProgress(
+          _ProgressView(
+            stage: view.stage,
+            fraction: null,
+            detail: '${view.detail}\n（網頁版無法顯示上傳進度）',
+          ),
+        );
+      } else {
+        _publishProgress(
+          _uploadView(estimator.snapshot(), uploadWatch.elapsed, uploadEstimate),
+        );
+      }
+    });
+
+    final uri = kIsWeb
+        ? await fileService.uploadAudioBytes(
+            webBytes!,
+            mimeType: mimeType,
+            fileName: fileName,
+            diag: diag,
+            onProgress: (sent, total) => estimator.update(sent),
+          )
+        : await fileService.uploadAudioPath(
+            path!,
+            mimeType: mimeType,
+            fileName: fileName,
+            diag: diag,
+            onProgress: (sent, total) => estimator.update(sent),
+          );
+    diag.uploadCompleted = true;
+    await _rememberRemoteFile(uri);
+
+    // 記下實測上傳速度，供下次預估用（有重試過的不記）。
+    if (diag.attempts <= 1) {
+      _history?.recordUpload(
+        bytes: audioSize,
+        seconds: uploadWatch.elapsed.inMilliseconds / 1000,
+      );
+      await _saveHistory();
+    }
+
+    if (mounted) setState(() => _statusText = '音檔處理中...');
+    await _waitForRemoteFile(
+      fileService,
+      uri,
+      processingLimit,
+      diag,
+      audioSize: audioSize,
+      recordHistory: true,
+    );
+    return uri;
+  }
+
+  Future<void> _waitForRemoteFile(
+    GeminiFileService fileService,
+    String fileUri,
+    Duration maxWait,
+    AnalysisDiagnostics diag, {
+    required int audioSize,
+    required bool recordHistory,
+  }) async {
+    // Google 處理音檔只回報狀態、沒有進度：顯示已等待時間與歷史預估。
+    final estimate = _history?.estimateProcessing(audioSize);
+    final watch = Stopwatch()..start();
+    _setProgressStage(
+      () => _publishProgress(
+        _waitingView(
+          '等待 Google 處理音檔',
+          watch.elapsed,
+          estimate,
+          overrunNote: 'Google 仍在處理',
+        ),
+      ),
+    );
+
+    try {
+      await fileService.waitUntilActive(
+        fileUri,
+        maxWait: maxWait,
+        diag: diag,
+      );
+      if (recordHistory) {
+        _history?.recordProcessing(
+          bytes: audioSize,
+          seconds: watch.elapsed.inMilliseconds / 1000,
+        );
+        await _saveHistory();
+      }
+    } on GeminiServiceException catch (e) {
+      // Google 回報這個檔案處理失敗：它不可能再被使用，忘掉它，
+      // 下次重試才會重新上傳。處理逾時則保留，下次會繼續等同一個檔案。
+      if (e.status == 'FAILED') await _forgetRemoteFile();
+      rethrow;
+    }
+  }
+
+  Future<void> _rememberRemoteFile(String fileUri) async {
+    try {
+      await PendingAudioService.saveRemoteFile(fileUri: fileUri);
+    } catch (e) {
+      debugPrint('Save remote file failed: ${sanitizeForDebug(e)}');
+    }
+    _pendingAudio = _pendingAudio?.withRemoteFile(fileUri, DateTime.now());
+  }
+
+  Future<void> _forgetRemoteFile() async {
+    try {
+      await PendingAudioService.clearRemoteFile();
+    } catch (e) {
+      debugPrint('Clear remote file failed: ${sanitizeForDebug(e)}');
+    }
+    _pendingAudio = _pendingAudio?.withRemoteFile(null, null);
+  }
+
+  // ── 進度顯示 ──
+
+  void _startProgress() {
+    _progressTicker?.cancel();
+    _progressTick = null;
+    _progressTicker = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => _progressTick?.call(),
+    );
+  }
+
+  /// 切換到新的階段：之後每秒呼叫一次 [tick] 更新畫面，並立刻呼叫一次。
+  void _setProgressStage(void Function() tick) {
+    _progressTick = tick;
+    tick();
+  }
+
+  void _stopProgress() {
+    _progressTicker?.cancel();
+    _progressTicker = null;
+    _progressTick = null;
+    if (mounted) _progressView.value = null;
+  }
+
+  void _publishProgress(_ProgressView view) {
+    if (!mounted) return;
+    _progressView.value = view;
+  }
+
+  Future<void> _saveHistory() async {
+    final history = _history;
+    if (history != null) await DurationHistoryStore.save(history);
+  }
+
+  _ProgressView _uploadView(
+    TransferSnapshot snap,
+    Duration elapsed,
+    EstimateRange? estimate,
+  ) {
+    const title = '上傳音檔';
+    final sent = formatMegabytes(snap.sentBytes);
+    final total = formatMegabytes(snap.totalBytes);
+
+    if (snap.waitingForServer) {
+      return _ProgressView(
+        stage: title,
+        fraction: 1,
+        detail: '已傳送 $total，等待 Google 確認中…（已用 ${formatClock(elapsed)}）',
+      );
+    }
+    if (snap.stalled) {
+      return _ProgressView(
+        stage: title,
+        fraction: snap.fraction,
+        detail: '已上傳 $sent / $total\n連線似乎不穩，等待恢復中…',
+      );
+    }
+    final speed = snap.bytesPerSecond;
+    if (speed == null) {
+      return _ProgressView(
+        stage: title,
+        fraction: snap.fraction,
+        detail:
+            '已上傳 $sent / $total・計算速度中…'
+            '${estimate != null ? '\n依先前的速度，預估${estimate.format()}' : ''}',
+      );
+    }
+    final remaining = snap.remaining;
+    return _ProgressView(
+      stage: title,
+      fraction: snap.fraction,
+      detail:
+          '已上傳 $sent / $total・${formatSpeed(speed)}\n'
+          '${remaining == null ? '剩餘時間計算中…' : '剩餘約 ${formatClock(remaining)}'}',
+    );
+  }
+
+  /// 沒有進度可看的階段（Google 處理、模型分析）：已等待時間加預估範圍。
+  _ProgressView _waitingView(
+    String title,
+    Duration elapsed,
+    EstimateRange? estimate, {
+    required String overrunNote,
+  }) {
+    final buffer = StringBuffer('已等待 ${formatClock(elapsed)}');
+    if (estimate != null) {
+      if (elapsed > estimate.high) {
+        buffer.write('・已超過預估，$overrunNote');
+      } else {
+        buffer.write('・預估${estimate.format()}');
+      }
+    }
+    return _ProgressView(
+      stage: title,
+      fraction: null,
+      detail: buffer.toString(),
+    );
   }
 
   String _enhancedPrompt(MeetingTemplate template) {
@@ -891,6 +1255,7 @@ ${template.prompt}
         _webAudioBytes = null;
         _lastFilePath = null;
         _pendingAudio = null;
+        _technicalDetails = null;
         _statusText = '錄音中...';
       });
     }
@@ -899,6 +1264,10 @@ ${template.prompt}
   @override
   void dispose() {
     _timer?.cancel();
+    _progressTicker?.cancel();
+    _progressTicker = null;
+    _progressTick = null;
+    _progressView.dispose();
     _recorder.dispose();
     super.dispose();
   }
@@ -969,6 +1338,41 @@ ${template.prompt}
                     textAlign: TextAlign.center,
                     style: const TextStyle(fontSize: 16),
                   ),
+                  ValueListenableBuilder<_ProgressView?>(
+                    valueListenable: _progressView,
+                    builder: (context, view, _) {
+                      if (view == null || !_isAnalyzing) {
+                        return const SizedBox.shrink();
+                      }
+                      return ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 360),
+                        child: Padding(
+                          padding: const EdgeInsets.only(top: 12),
+                          child: Column(
+                            children: [
+                              Text(
+                                view.stage,
+                                style: const TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              LinearProgressIndicator(value: view.fraction),
+                              const SizedBox(height: 6),
+                              Text(
+                                view.detail,
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(fontSize: 13),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                  if (_technicalDetails != null && !_isAnalyzing)
+                    _technicalDetailsPanel(),
                 ],
               ),
             ),
@@ -1188,6 +1592,44 @@ ${template.prompt}
                 ],
               ),
             ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 分析失敗時，錯誤訊息下方預設收合的「技術細節」，可展開查看與複製。
+  Widget _technicalDetailsPanel() {
+    final details = _technicalDetails!;
+    return SizedBox(
+      width: double.infinity,
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          title: const Text('技術細節', style: TextStyle(fontSize: 14)),
+          childrenPadding: const EdgeInsets.symmetric(horizontal: 8),
+          children: [
+            Align(
+              alignment: Alignment.centerLeft,
+              child: SelectableText(
+                details,
+                style: const TextStyle(fontSize: 12, height: 1.4),
+              ),
+            ),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                onPressed: () async {
+                  await Clipboard.setData(ClipboardData(text: details));
+                  if (!mounted) return;
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(const SnackBar(content: Text('已複製技術細節')));
+                },
+                icon: const Icon(Icons.copy, size: 16),
+                label: const Text('複製'),
+              ),
+            ),
           ],
         ),
       ),

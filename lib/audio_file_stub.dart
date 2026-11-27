@@ -12,6 +12,10 @@ Future<Uint8List> readAudioFileBytes(String path) {
   throw UnsupportedError('File paths are not available on this platform.');
 }
 
+Future<Uint8List> readAudioFileHead(String path, int count) {
+  throw UnsupportedError('File paths are not available on this platform.');
+}
+
 Future<String> copyAudioToPending(String sourcePath, String fileName) {
   throw UnsupportedError('File paths are not available on this platform.');
 }

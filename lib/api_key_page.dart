@@ -3,6 +3,7 @@ import 'recorder_page.dart'; // 確保能跳轉到錄音頁
 import 'transitions.dart';
 import 'key_storage.dart';
 import 'onboarding_page.dart';
+import 'pending_audio_service.dart';
 import 'gemini_model_service.dart';
 
 class ApiKeyPage extends StatefulWidget {
@@ -69,6 +70,9 @@ class _ApiKeyPageState extends State<ApiKeyPage> {
 
     if (!mounted) return;
     await KeyStorage.write(key);
+    // 舊 Key 上傳到 Google 的音檔，換了 Key 之後不一定還能使用，
+    // 清掉記錄，下次重試時會重新上傳。
+    await PendingAudioService.clearRemoteFile();
     if (mounted) {
       if (widget.isUpdate) {
         Navigator.pop(context);
