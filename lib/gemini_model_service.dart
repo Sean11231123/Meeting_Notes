@@ -2,6 +2,11 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
+/// Gemini 4 系列的型號名稱（模型 ID 為 `gemini-4-<名稱>`），依「快→強」排序，
+/// 也是選單中的顯示順序。Google 改用這些名稱取代 Flash／Pro 命名，所以 ID 裡
+/// 沒有 "flash"。之後出現新型號時，在這裡加上名稱即可。
+const List<String> kGemini4Families = ['hydrogen', 'neon', 'carbon', 'argon'];
+
 /// 代表一個從 Gemini API 動態取得的模型
 class GeminiModel {
   final String id;
@@ -21,7 +26,8 @@ class GeminiModelService {
   static Future<List<GeminiModel>> fetchAvailableModels(String apiKey) async {
     try {
       final uri = Uri.parse('$_base/v1beta/models?key=$apiKey&pageSize=200');
-      debugPrint('[ModelService] fetching: $uri (isWeb=$kIsWeb)');
+      // 網址含 API Key，不能印在日誌裡（日誌常會被貼出來求助）。
+      debugPrint('[ModelService] fetching: $_base/v1beta/models (isWeb=$kIsWeb)');
 
       final response = await http.get(uri).timeout(const Duration(seconds: 15));
 
@@ -48,91 +54,15 @@ class GeminiModelService {
           .map((m) => Map<String, dynamic>.from(m))
           .toList();
 
-      final results = <GeminiModel>[];
-
-      for (final m in rawModels) {
-        final rawName = m['name'] as String? ?? '';
-        final modelId = rawName.replaceFirst('models/', '');
-
-        final supportedMethods = [
-          ...((m['supportedGenerationMethods'] as List<dynamic>?) ?? []),
-          ...((m['supportedActions'] as List<dynamic>?) ?? []),
-        ].map((e) => e.toString()).toList();
-
-        // ── 過濾規則 ───────────────────────────────────────────
-        // 1. 必須以 gemini- 開頭
-        if (!modelId.startsWith('gemini-')) continue;
-
-        // 2. 版本號必須 >= 2.5（排除 gemini-2.0-flash 等舊版本）
-        //    modelId 格式：gemini-X.Y-flash[-lite]
-        final versionMatch = RegExp(
-          r'^gemini-(\d+)\.(\d+)-',
-        ).firstMatch(modelId);
-        if (versionMatch != null) {
-          final major = int.tryParse(versionMatch.group(1)!) ?? 0;
-          final minor = int.tryParse(versionMatch.group(2)!) ?? 0;
-          final version = major * 10 + minor; // e.g. 2.5 → 25, 2.0 → 20
-          if (version < 25) continue; // 排除 2.0、1.x 等舊版本
-        }
-
-        // 3. 必須含 flash
-        if (!modelId.contains('flash')) continue;
-
-        // 4. 必須支援 generateContent
-        if (!supportedMethods.contains('generateContent')) continue;
-
-        // 5. 排除 -latest / -stable alias
-        if (modelId.endsWith('-latest') || modelId.endsWith('-stable'))
-          continue;
-
-        // 6. 排除 preview / exp / experimental
-        if (RegExp(r'(preview|exp\b|experimental)').hasMatch(modelId)) continue;
-
-        // 7. 排除 thinking 系列
-        if (modelId.contains('thinking')) continue;
-
-        // 8. 排除末尾三位數 revision（-001、-002 與主模型重複）
-        if (RegExp(r'-\d{3}$').hasMatch(modelId)) continue;
-
-        // 9. 排除 image / imagen / tts / speech / embedding 等特化模型
-        //    同時檢查 modelId 和 displayName
-        final displayNameRaw = (m['displayName'] as String? ?? '')
-            .toLowerCase();
-        final specializedKeywords = [
-          'image',
-          'imagen',
-          'tts',
-          'speech',
-          'native-audio',
-          'live',
-          'dialog',
-          'embedding',
-          'aqa',
-        ];
-        if (specializedKeywords.any(
-          (kw) => modelId.contains(kw) || displayNameRaw.contains(kw),
-        ))
-          continue;
-
-        results.add(
-          GeminiModel(id: modelId, displayName: _buildDisplayName(modelId)),
-        );
-      }
+      final results = filterModels(
+        rawModels,
+        onRejected: (message) => debugPrint('[ModelService] rejected: $message'),
+      );
 
       debugPrint('[ModelService] filtered model count: ${results.length}');
       for (final r in results) {
         debugPrint('[ModelService]   ${r.id}');
       }
-
-      // 排序：版本號大的排前，lite 排在同版本 flash 之後
-      results.sort((a, b) {
-        final aBase = a.id.replaceAll('-lite', '').replaceAll('-flash', '');
-        final bBase = b.id.replaceAll('-lite', '').replaceAll('-flash', '');
-        if (aBase != bBase) return bBase.compareTo(aBase);
-        final aLite = a.id.contains('lite');
-        final bLite = b.id.contains('lite');
-        return aLite ? 1 : (bLite ? -1 : 0);
-      });
 
       return results;
     } catch (e, stack) {
@@ -140,6 +70,133 @@ class GeminiModelService {
       debugPrint('[ModelService] stack: $stack');
       return [];
     }
+  }
+
+  /// 從 `models.list` 的原始資料挑出「適合拿來分析錄音」的模型，並排好順序。
+  ///
+  /// 挑選依據是模型 ID 的格式，而不是「名稱含不含 flash」：
+  /// - Flash 系列：`gemini-X.Y-flash` 與 `gemini-X.Y-flash-lite`，版本 2.5 以上；
+  /// - Gemini 4 系列：`gemini-4-<名稱>`，名稱見 [kGemini4Families]。
+  /// 其他一律不收，例如 `gemini-omni-*`（影片生成，不支援音訊輸入）。
+  ///
+  /// models.list 不提供「可輸入哪些媒體」的欄位，所以只能靠 ID 判斷；
+  /// 被排除的模型會透過 [onRejected] 回報原因，方便除錯。
+  static List<GeminiModel> filterModels(
+    List<Map<String, dynamic>> rawModels, {
+    void Function(String message)? onRejected,
+  }) {
+    final results = <GeminiModel>[];
+    for (final m in rawModels) {
+      final rawName = m['name'] as String? ?? '';
+      final modelId = rawName.replaceFirst('models/', '');
+      final displayName = m['displayName'] as String? ?? '';
+      final methods = [
+        ...((m['supportedGenerationMethods'] as List<dynamic>?) ?? []),
+        ...((m['supportedActions'] as List<dynamic>?) ?? []),
+      ].map((e) => e.toString()).toList();
+
+      final reason = rejectReason(modelId, displayName, methods);
+      if (reason != null) {
+        // 只回報 gemini- 開頭的（embedding、gemma 等不相關的不吵）。
+        if (modelId.startsWith('gemini-')) onRejected?.call('$modelId — $reason');
+        continue;
+      }
+      results.add(
+        GeminiModel(id: modelId, displayName: _buildDisplayName(modelId)),
+      );
+    }
+
+    results.sort(_compareForDisplay);
+    return results;
+  }
+
+  static final RegExp _flashPattern = RegExp(
+    r'^gemini-(\d+)(?:\.(\d+))?-flash(-lite)?$',
+  );
+  static final RegExp _gemini4Pattern = RegExp(
+    '^gemini-4-(${kGemini4Families.join('|')})\$',
+  );
+
+  static const _specializedKeywords = [
+    'omni', // 影片生成模型，不支援 generateContent 的音訊輸入
+    'image',
+    'imagen',
+    'tts',
+    'speech',
+    'native-audio',
+    'live',
+    'dialog',
+    'embedding',
+    'aqa',
+  ];
+
+  /// 不適合的原因；適合時回傳 null。
+  static String? rejectReason(
+    String modelId,
+    String displayName,
+    List<String> supportedMethods,
+  ) {
+    if (!modelId.startsWith('gemini-')) return '不是 gemini- 開頭';
+
+    // App 用 generateContent 呼叫模型，不支援的就無法使用。
+    if (!supportedMethods.contains('generateContent')) {
+      return '不支援 generateContent（支援：${supportedMethods.join(', ')}）';
+    }
+
+    final name = displayName.toLowerCase();
+    for (final kw in _specializedKeywords) {
+      if (modelId.contains(kw) || name.contains(kw)) return '特化模型（$kw）';
+    }
+
+    if (modelId.endsWith('-latest') || modelId.endsWith('-stable')) {
+      return '別名（-latest／-stable）';
+    }
+    if (RegExp(r'(preview|exp\b|experimental)').hasMatch(modelId)) {
+      return 'preview／experimental';
+    }
+    if (modelId.contains('thinking')) return 'thinking 系列';
+    if (RegExp(r'-\d{3}$').hasMatch(modelId)) return '末尾三位數 revision';
+
+    if (_gemini4Pattern.hasMatch(modelId)) return null;
+
+    final flash = _flashPattern.firstMatch(modelId);
+    if (flash != null) {
+      final major = int.parse(flash.group(1)!);
+      final minor = int.tryParse(flash.group(2) ?? '') ?? 0;
+      if (major < 2 || (major == 2 && minor < 5)) return '版本低於 2.5';
+      return null;
+    }
+
+    return '不是 Flash 或 Gemini 4 系列';
+  }
+
+  /// 版本新的在前；同版本內 Gemini 4 依 [kGemini4Families] 的順序，
+  /// Flash 排在 Flash Lite 之前。
+  static int _compareForDisplay(GeminiModel a, GeminiModel b) {
+    final ka = _sortKey(a.id);
+    final kb = _sortKey(b.id);
+    for (var i = 0; i < ka.length; i++) {
+      if (ka[i] != kb[i]) return ka[i].compareTo(kb[i]);
+    }
+    return a.id.compareTo(b.id);
+  }
+
+  /// [-主版本, -次版本, Gemini 4 型號順序, 是否 lite]：全部由小到大比較。
+  static List<int> _sortKey(String modelId) {
+    final g4 = _gemini4Pattern.firstMatch(modelId);
+    if (g4 != null) {
+      return [-4, 0, kGemini4Families.indexOf(g4.group(1)!), 0];
+    }
+    final flash = _flashPattern.firstMatch(modelId);
+    if (flash != null) {
+      return [
+        -int.parse(flash.group(1)!),
+        -(int.tryParse(flash.group(2) ?? '') ?? 0),
+        0,
+        flash.group(3) != null ? 1 : 0,
+      ];
+    }
+    return [0, 0, 0, 0];
   }
 
   /// gemini-2.5-flash      → Gemini 2.5 Flash

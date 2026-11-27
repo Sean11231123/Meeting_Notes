@@ -114,6 +114,13 @@ class _ModelSelectorState extends State<_ModelSelector> {
         ? savedModel
         : models.first.id;
 
+    // 清單變動後，原本儲存的模型可能已不在清單裡（例如被篩選規則排除）。
+    // 畫面改顯示第一個時，也要一併存起來，否則實際分析用的還是舊模型，
+    // 與畫面上顯示的不一致。
+    if (validModel != savedModel) {
+      await ModelSettings.write(validModel);
+    }
+
     if (!mounted) return;
     setState(() {
       _models = models;
